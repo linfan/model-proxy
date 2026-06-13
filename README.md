@@ -14,6 +14,10 @@ A proxy server for LLM APIs that supports both OpenAI and Anthropic backends. It
 - **Streaming** — full SSE streaming support for both backends, including cross-format streaming conversion.
 - **YAML config** — all settings in a single `config.yaml` file.
 
+## Version
+
+The version number is in `Cargo.toml` (`version = "x.y.z"`). The git commit hash and build timestamp are captured automatically at compile time. Update the version by editing `Cargo.toml` before building.
+
 ## Build
 
 Requires Rust toolchain. Install via [rustup](https://rustup.rs/).
@@ -71,6 +75,7 @@ backends:
 | `--config` | `-c` | `~/.model-proxy/config.yaml` | Path to YAML config file |
 | `--port` | `-p` | `8000` | Port to listen on (overrides config) |
 | `--debug` | `-d` | `false` | Enable debug logging (overrides config) |
+| `--version` | `-V` | | Show version, git commit hash, and build time |
 
 ### API endpoints
 

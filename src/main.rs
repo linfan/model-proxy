@@ -12,7 +12,11 @@ use clap::Parser;
 use tracing::info;
 
 #[derive(Parser)]
-#[command(name = "model-proxy", about = "Model proxy server for OpenAI and Anthropic APIs")]
+#[command(
+    name = "model-proxy",
+    about = "Model proxy server for OpenAI and Anthropic APIs",
+    version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_HASH"), " ", env!("BUILD_TIME"), ")"),
+)]
 struct Cli {
     /// Enable debug mode with verbose logging
     #[arg(short, long)]
