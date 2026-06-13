@@ -72,22 +72,22 @@ backends:
       api_token: sk-ant-xxx     # Used as x-api-key header
       model: claude-sonnet-4-20250514
       system_prompt: ""
-      thinking:                 # Per-model thinking defaults
-        enabled: true           # Enable extended thinking
-        budget_tokens: 10000    # Max tokens for thinking output
+      thinking:                 # Default thinking injected when client omits it
+        enabled: true           # Inject thinking: {type: enabled} by default
+        budget_tokens: 10000    # Default budget_tokens value
 
     - name: claude-haiku
       url: https://api.anthropic.com/v1/messages
       api_token: sk-ant-xxx
       model: claude-haiku-4-5-20251001
-      # thinking is optional; omit to disable thinking by default
-      # Clients can still enable it per-request:
-      #   "thinking": {"type": "enabled", "budget_tokens": 5000}
+      # thinking is optional; omit to not inject thinking by default.
+      # Clients can always send their own thinking field per the
+      # Anthropic API spec — it passes through as-is.
 
     - name: claude-opus
       url: https://api.anthropic.com/v1/messages
       api_token: sk-ant-xxx
       model: claude-opus-4-20250514
       thinking:
-        enabled: false          # Disabled by default, clients can override
-        budget_tokens: 16000    # Budget used when client enables thinking
+        enabled: false          # Don't inject thinking by default
+        budget_tokens: 16000    # Budget used if enabled is set to true

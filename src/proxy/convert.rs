@@ -87,11 +87,7 @@ pub fn openai_to_anthropic_request(
         max_tokens,
         system,
         stream: req.stream,
-        temperature: if thinking.enabled {
-            None
-        } else {
-            req.temperature
-        },
+        temperature: req.temperature,
         tools: req.tools.clone(),
         tool_choice: req.tool_choice.clone(),
         thinking: anthropic_thinking,
@@ -285,7 +281,6 @@ pub fn anthropic_to_openai_request(
         temperature: req.temperature,
         tools: req.tools.clone(),
         tool_choice: req.tool_choice.clone(),
-        thinking: None,
         extra: Default::default(),
     }
 }

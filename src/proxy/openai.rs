@@ -29,9 +29,6 @@ pub async fn forward_chat_completion(
         }
     }
 
-    // Remove the thinking override from the request body — it's not an OpenAI parameter
-    request.thinking = None;
-
     let body = match serde_json::to_value(&request) {
         Ok(v) => v,
         Err(e) => return proxy_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("serialize error: {e}")),

@@ -32,7 +32,7 @@ pub async fn handle_chat_completions(
         }
     };
 
-    let thinking = ThinkingSettings::resolve(resolved, request.thinking.as_ref());
+    let thinking = ThinkingSettings::from_config(resolved);
     debug!("chat completions: model={model_name} backend={:?} thinking={:?}", resolved.backend_type, thinking);
 
     match resolved.backend_type {
@@ -80,12 +80,7 @@ pub async fn handle_messages(
         }
     };
 
-    let thinking_override = request.thinking.as_ref().map(|t| ThinkingOverride {
-        enabled: Some(t.thinking_type == "enabled"),
-        budget_tokens: t.budget_tokens,
-    });
-    let thinking = ThinkingSettings::resolve(resolved, thinking_override.as_ref());
-
+    let thinking = ThinkingSettings::from_config(resolved);
     debug!("messages: model={model_name} backend={:?} thinking={:?}", resolved.backend_type, thinking);
 
     match resolved.backend_type {

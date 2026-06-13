@@ -20,18 +20,8 @@ pub struct ChatCompletionRequest {
     pub tools: Option<Vec<Value>>,
     #[serde(default)]
     pub tool_choice: Option<Value>,
-    #[serde(default)]
-    pub thinking: Option<ThinkingOverride>,
     #[serde(flatten)]
     pub extra: std::collections::HashMap<String, Value>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ThinkingOverride {
-    #[serde(default)]
-    pub enabled: Option<bool>,
-    #[serde(default)]
-    pub budget_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

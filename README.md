@@ -6,9 +6,10 @@ A proxy server for LLM APIs that supports both OpenAI and Anthropic backends. It
 
 - **Dual API support** — exposes both `/v1/chat/completions` (OpenAI format) and `/v1/messages` (Anthropic format). Automatically converts between formats when a client's request format doesn't match the backend type.
 - **Model mapping** — clients use local model names; the proxy replaces them with remote model/URL/token.
-- **Thinking support** — configurable per model with per-request overrides:
-  - Anthropic backends: native extended thinking (`budget_tokens`)
+- **Thinking support** — configurable per model via YAML defaults:
+  - Anthropic backends: injects native `thinking` parameter when client doesn't specify one
   - OpenAI backends: `<think>` tag parsing → `reasoning_content` conversion
+- **Transparent proxying** — client request bodies are forwarded as-is to their native API format. Each API uses its own standard fields (e.g. OpenAI `reasoning_effort`, Anthropic `thinking`).
 - **Request recording** — saves request/response JSON to disk with automatic cleanup of old records.
 - **Streaming** — full SSE streaming support for both backends, including cross-format streaming conversion.
 - **YAML config** — all settings in a single `config.yaml` file.
@@ -116,27 +117,14 @@ curl -X POST http://localhost:8000/v1/messages \
 curl http://localhost:8000/v1/models
 ```
 
-### Thinking per-request override
+### Thinking
 
-Clients can override per-model thinking defaults in the request body:
+Thinking defaults are set per model in `config.yaml`. Clients can always override by including the native thinking field in their request — the proxy passes it through as-is:
 
-**OpenAI format** (`/v1/chat/completions`):
-```json
-{
-  "model": "claude-sonnet",
-  "messages": [...],
-  "thinking": {"enabled": true, "budget_tokens": 8000}
-}
-```
+- **Anthropic** (`/v1/messages`): use `"thinking": {"type": "enabled", "budget_tokens": 8000}` per Anthropic's API
+- **OpenAI** (`/v1/chat/completions`): use `"reasoning_effort": "high"` per OpenAI's API (for o-series models)
 
-**Anthropic format** (`/v1/messages`):
-```json
-{
-  "model": "claude-sonnet",
-  "messages": [...],
-  "thinking": {"type": "enabled", "budget_tokens": 8000}
-}
-```
+If the client omits thinking fields, the proxy applies the YAML config defaults for Anthropic backends. For OpenAI backends, the config controls `<think>` tag parsing in streaming responses.
 
 ## Linux systemd service
 
