@@ -243,7 +243,16 @@ async fn stream_anthropic_passthrough(resp: reqwest::Response, recorder: Recorde
     tokio::spawn(async move {
         let mut stream = resp.bytes_stream();
         let mut buffer = String::new();
-        let mut last_data = Value::Null;
+        let mut pending_event_type: Option<String> = None;
+
+        let mut msg_id = String::new();
+        let mut msg_model = String::new();
+        let mut msg_role = String::new();
+        let mut content_blocks: Vec<Value> = Vec::new();
+        let mut current_block: Option<Value> = None;
+        let mut stop_reason: Option<String> = None;
+        let mut usage = serde_json::json!({"input_tokens": 0, "output_tokens": 0});
+        let mut has_data = false;
 
         while let Some(chunk) = stream.next().await {
             let chunk = match chunk {
@@ -257,10 +266,87 @@ async fn stream_anthropic_passthrough(resp: reqwest::Response, recorder: Recorde
                 let line = buffer[..line_end].trim_end().to_string();
                 buffer = buffer[line_end + 1..].to_string();
 
+                if let Some(event_name) = line.strip_prefix("event:") {
+                    pending_event_type = Some(event_name.trim().to_string());
+                }
+
                 if line.starts_with("data:") {
-                    let data = line.strip_prefix("data:").unwrap().trim();
-                    if let Ok(parsed) = serde_json::from_str::<Value>(data) {
-                        last_data = parsed;
+                    let data_str = line.strip_prefix("data:").unwrap().trim();
+                    if let Ok(parsed) = serde_json::from_str::<Value>(data_str) {
+                        has_data = true;
+                        let event_type = pending_event_type.take().unwrap_or_default();
+
+                        match event_type.as_str() {
+                            "message_start" => {
+                                if let Some(msg) = parsed.get("message") {
+                                    msg_id = msg.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                    msg_model = msg.get("model").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                    msg_role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("assistant").to_string();
+                                    if let Some(u) = msg.get("usage") {
+                                        usage = u.clone();
+                                    }
+                                }
+                            }
+                            "content_block_start" => {
+                                if let Some(cb) = parsed.get("content_block") {
+                                    current_block = Some(cb.clone());
+                                }
+                            }
+                            "content_block_delta" => {
+                                if let Some(delta) = parsed.get("delta") {
+                                    let delta_type = delta.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                                    if let Some(ref mut block) = current_block {
+                                        match delta_type {
+                                            "text_delta" => {
+                                                if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
+                                                    let cur = block.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                                                    block["text"] = Value::String(format!("{cur}{text}"));
+                                                }
+                                            }
+                                            "thinking_delta" => {
+                                                if let Some(thinking) = delta.get("thinking").and_then(|v| v.as_str()) {
+                                                    let cur = block.get("thinking").and_then(|v| v.as_str()).unwrap_or("");
+                                                    block["thinking"] = Value::String(format!("{cur}{thinking}"));
+                                                }
+                                            }
+                                            "input_json_delta" => {
+                                                if let Some(json_str) = delta.get("partial_json").and_then(|v| v.as_str()) {
+                                                    let cur = block.get("_partial_input").and_then(|v| v.as_str()).unwrap_or("");
+                                                    block["_partial_input"] = Value::String(format!("{cur}{json_str}"));
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+                            "content_block_stop" => {
+                                if let Some(mut block) = current_block.take() {
+                                    if block.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                                        if let Some(partial) = block.get("_partial_input").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+                                            if let Ok(input) = serde_json::from_str::<Value>(&partial) {
+                                                block["input"] = input;
+                                            }
+                                            block.as_object_mut().map(|m| m.remove("_partial_input"));
+                                        }
+                                    }
+                                    content_blocks.push(block);
+                                }
+                            }
+                            "message_delta" => {
+                                if let Some(delta) = parsed.get("delta") {
+                                    if let Some(sr) = delta.get("stop_reason").and_then(|v| v.as_str()) {
+                                        stop_reason = Some(sr.to_string());
+                                    }
+                                }
+                                if let Some(u) = parsed.get("usage") {
+                                    if let Some(ot) = u.get("output_tokens") {
+                                        usage["output_tokens"] = ot.clone();
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
                     }
                 }
 
@@ -268,8 +354,17 @@ async fn stream_anthropic_passthrough(resp: reqwest::Response, recorder: Recorde
             }
         }
 
-        if last_data != Value::Null {
-            recorder.record_response(&request_id, &last_data).await;
+        if has_data {
+            let assembled = serde_json::json!({
+                "id": msg_id,
+                "type": "message",
+                "role": msg_role,
+                "model": msg_model,
+                "content": content_blocks,
+                "stop_reason": stop_reason,
+                "usage": usage
+            });
+            recorder.record_response(&request_id, &assembled).await;
         }
     });
 
@@ -286,7 +381,7 @@ async fn stream_anthropic_passthrough(resp: reqwest::Response, recorder: Recorde
 
 // ── Streaming: Anthropic SSE → OpenAI SSE ──
 
-async fn stream_anthropic_to_openai(resp: reqwest::Response, _recorder: Recorder, _request_id: String) -> Response {
+async fn stream_anthropic_to_openai(resp: reqwest::Response, recorder: Recorder, request_id: String) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(64);
 
     tokio::spawn(async move {
@@ -299,6 +394,12 @@ async fn stream_anthropic_to_openai(resp: reqwest::Response, _recorder: Recorder
         let mut _current_block_type: Option<String> = None;
         let mut response_text = String::new();
         let mut reasoning_text = String::new();
+        let mut tool_calls: Vec<Value> = Vec::new();
+        let mut current_tool_call: Option<Value> = None;
+        let mut current_tool_args = String::new();
+        let mut finish_reason: Option<String> = None;
+        let mut usage_value: Option<Value> = None;
+        let mut has_data = false;
 
         while let Some(chunk) = stream.next().await {
             let chunk = match chunk {
@@ -328,6 +429,7 @@ async fn stream_anthropic_to_openai(resp: reqwest::Response, _recorder: Recorder
                 };
 
                 let event_type = pending_event_type.take().unwrap_or_default();
+                has_data = true;
 
                 match event_type.as_str() {
                     "message_start" => {
@@ -342,6 +444,17 @@ async fn stream_anthropic_to_openai(resp: reqwest::Response, _recorder: Recorder
                         if let Some(cb) = data.get("content_block") {
                             let cb_type = cb.get("type").and_then(|v| v.as_str()).unwrap_or("");
                             _current_block_type = Some(cb_type.to_string());
+                            if cb_type == "tool_use" {
+                                current_tool_call = Some(serde_json::json!({
+                                    "id": cb.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+                                    "type": "function",
+                                    "function": {
+                                        "name": cb.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+                                        "arguments": ""
+                                    }
+                                }));
+                                current_tool_args.clear();
+                            }
                         }
                     }
                     "content_block_delta" => {
@@ -361,13 +474,20 @@ async fn stream_anthropic_to_openai(resp: reqwest::Response, _recorder: Recorder
                                     send_openai_chunk(&tx, &chunk).await;
                                 }
                                 "input_json_delta" => {
-                                    // Tool call argument streaming — simplified passthrough
+                                    if let Some(json_str) = delta.get("partial_json").and_then(|v| v.as_str()) {
+                                        current_tool_args.push_str(json_str);
+                                    }
                                 }
                                 _ => {}
                             }
                         }
                     }
                     "content_block_stop" => {
+                        if let Some(mut tc) = current_tool_call.take() {
+                            tc["function"]["arguments"] = Value::String(current_tool_args.clone());
+                            tool_calls.push(tc);
+                            current_tool_args.clear();
+                        }
                         _current_block_type = None;
                     }
                     "message_delta" => {
@@ -383,6 +503,7 @@ async fn stream_anthropic_to_openai(resp: reqwest::Response, _recorder: Recorder
                             });
 
                         if let Some(reason) = stop_reason {
+                            finish_reason = Some(reason.to_string());
                             let chunk = make_openai_chunk_with_finish(&msg_id, &msg_model, reason);
                             send_openai_chunk(&tx, &chunk).await;
                         }
@@ -390,6 +511,11 @@ async fn stream_anthropic_to_openai(resp: reqwest::Response, _recorder: Recorder
                         if let Some(usage) = data.get("usage") {
                             let output_tokens = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                             let input_tokens = 0u32;
+                            usage_value = Some(serde_json::json!({
+                                "prompt_tokens": input_tokens,
+                                "completion_tokens": output_tokens,
+                                "total_tokens": input_tokens + output_tokens
+                            }));
                             let chunk = make_openai_chunk_with_usage(&msg_id, &msg_model, input_tokens, output_tokens);
                             send_openai_chunk(&tx, &chunk).await;
                         }
@@ -400,6 +526,15 @@ async fn stream_anthropic_to_openai(resp: reqwest::Response, _recorder: Recorder
                     _ => {}
                 }
             }
+        }
+
+        if has_data {
+            let assembled = assemble_openai_response(
+                &msg_id, &msg_model,
+                &response_text, &reasoning_text, &tool_calls,
+                finish_reason.as_deref(), usage_value,
+            );
+            recorder.record_response(&request_id, &assembled).await;
         }
     });
 
@@ -416,7 +551,7 @@ async fn stream_anthropic_to_openai(resp: reqwest::Response, _recorder: Recorder
 
 // ── Streaming: OpenAI SSE → Anthropic SSE ──
 
-async fn stream_openai_to_anthropic(resp: reqwest::Response, _recorder: Recorder, _request_id: String) -> Response {
+async fn stream_openai_to_anthropic(resp: reqwest::Response, recorder: Recorder, request_id: String) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(64);
 
     tokio::spawn(async move {
@@ -424,8 +559,12 @@ async fn stream_openai_to_anthropic(resp: reqwest::Response, _recorder: Recorder
         let mut buffer = String::new();
         let mut first_chunk = true;
         let block_index: u32 = 0;
-        let mut msg_id;
-        let mut msg_model;
+        let mut msg_id = String::new();
+        let mut msg_model = String::new();
+        let mut response_text = String::new();
+        let mut reasoning_text = String::new();
+        let mut stop_reason: Option<String> = None;
+        let mut has_data = false;
 
         while let Some(chunk) = stream.next().await {
             let chunk = match chunk {
@@ -460,6 +599,8 @@ async fn stream_openai_to_anthropic(resp: reqwest::Response, _recorder: Recorder
                     Err(_) => continue,
                 };
 
+                has_data = true;
+
                 if first_chunk {
                     msg_id = data.get("id").and_then(|v| v.as_str()).unwrap_or("msg_proxy").to_string();
                     msg_model = data.get("model").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -488,12 +629,14 @@ async fn stream_openai_to_anthropic(resp: reqwest::Response, _recorder: Recorder
                     for choice in choices {
                         if let Some(delta) = choice.get("delta") {
                             if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                                response_text.push_str(content);
                                 send_anthropic_event(&tx, "content_block_delta", &serde_json::json!({
                                     "index": block_index,
                                     "delta": {"type": "text_delta", "text": content}
                                 })).await;
                             }
                             if let Some(rc) = delta.get("reasoning_content").and_then(|c| c.as_str()) {
+                                reasoning_text.push_str(rc);
                                 send_anthropic_event(&tx, "content_block_delta", &serde_json::json!({
                                     "index": block_index,
                                     "delta": {"type": "thinking_delta", "thinking": rc}
@@ -508,6 +651,7 @@ async fn stream_openai_to_anthropic(resp: reqwest::Response, _recorder: Recorder
                                 "tool_calls" => "tool_use",
                                 other => other,
                             };
+                            stop_reason = Some(stop.to_string());
                             send_anthropic_event(&tx, "content_block_stop", &serde_json::json!({"index": block_index})).await;
                             send_anthropic_event(&tx, "message_delta", &serde_json::json!({
                                 "delta": {"stop_reason": stop},
@@ -518,6 +662,26 @@ async fn stream_openai_to_anthropic(resp: reqwest::Response, _recorder: Recorder
                     }
                 }
             }
+        }
+
+        if has_data {
+            let mut content_blocks: Vec<Value> = Vec::new();
+            if !reasoning_text.is_empty() {
+                content_blocks.push(serde_json::json!({"type": "thinking", "thinking": reasoning_text}));
+            }
+            if !response_text.is_empty() {
+                content_blocks.push(serde_json::json!({"type": "text", "text": response_text}));
+            }
+            let assembled = serde_json::json!({
+                "id": msg_id,
+                "type": "message",
+                "role": "assistant",
+                "model": msg_model,
+                "content": content_blocks,
+                "stop_reason": stop_reason,
+                "usage": {"input_tokens": 0, "output_tokens": 0}
+            });
+            recorder.record_response(&request_id, &assembled).await;
         }
     });
 
@@ -533,6 +697,47 @@ async fn stream_openai_to_anthropic(resp: reqwest::Response, _recorder: Recorder
 }
 
 // ── Helpers ──
+
+fn assemble_openai_response(
+    id: &str, model: &str,
+    content: &str, reasoning: &str, tool_calls: &[Value],
+    finish_reason: Option<&str>, usage: Option<Value>,
+) -> Value {
+    let mut message = serde_json::Map::new();
+    message.insert("role".to_string(), Value::String("assistant".to_string()));
+    if !content.is_empty() {
+        message.insert("content".to_string(), Value::String(content.to_string()));
+    }
+    if !reasoning.is_empty() {
+        message.insert("reasoning_content".to_string(), Value::String(reasoning.to_string()));
+    }
+    if !tool_calls.is_empty() {
+        message.insert("tool_calls".to_string(), Value::Array(tool_calls.to_vec()));
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let mut resp = serde_json::json!({
+        "id": id,
+        "object": "chat.completion",
+        "created": now,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": message,
+            "finish_reason": finish_reason
+        }]
+    });
+
+    if let Some(u) = usage {
+        resp["usage"] = u;
+    }
+
+    resp
+}
 
 fn make_openai_chunk(id: &str, model: &str, role: Option<&str>, content: Option<&str>, reasoning: Option<&str>, finish: Option<&str>) -> Value {
     let now = std::time::SystemTime::now()

@@ -83,10 +83,17 @@ async fn stream_response(resp: reqwest::Response, recorder: Recorder, request_id
     tokio::spawn(async move {
         let mut stream = resp.bytes_stream();
         let mut buffer = String::new();
-        let mut collected_response = Value::Null;
         let mut response_text = String::new();
         let mut reasoning_text = String::new();
         let mut in_think_block = false;
+
+        let mut chunk_id = String::new();
+        let mut chunk_model = String::new();
+        let mut chunk_created: u64 = 0;
+        let mut finish_reason: Option<String> = None;
+        let mut usage_value: Option<Value> = None;
+        let mut tool_calls: Vec<Value> = Vec::new();
+        let mut has_data = false;
 
         while let Some(chunk) = stream.next().await {
             let chunk = match chunk {
@@ -114,10 +121,41 @@ async fn stream_response(resp: reqwest::Response, recorder: Recorder, request_id
                     }
 
                     if let Ok(mut event) = serde_json::from_str::<Value>(data) {
+                        if chunk_id.is_empty() {
+                            chunk_id = event.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            chunk_model = event.get("model").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            chunk_created = event.get("created").and_then(|v| v.as_u64()).unwrap_or(0);
+                        }
+                        has_data = true;
+
                         if parse_think_tags {
                             process_think_tags(&mut event, &mut in_think_block, &mut response_text, &mut reasoning_text);
                         }
-                        collected_response = event.clone();
+
+                        if let Some(choices) = event.get("choices").and_then(|c| c.as_array()) {
+                            for choice in choices {
+                                if let Some(delta) = choice.get("delta") {
+                                    if !parse_think_tags {
+                                        if let Some(c) = delta.get("content").and_then(|v| v.as_str()) {
+                                            response_text.push_str(c);
+                                        }
+                                        if let Some(r) = delta.get("reasoning_content").and_then(|v| v.as_str()) {
+                                            reasoning_text.push_str(r);
+                                        }
+                                    }
+                                    if let Some(tcs) = delta.get("tool_calls").and_then(|v| v.as_array()) {
+                                        accumulate_tool_calls(&mut tool_calls, tcs);
+                                    }
+                                }
+                                if let Some(fr) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+                                    finish_reason = Some(fr.to_string());
+                                }
+                            }
+                        }
+
+                        if let Some(u) = event.get("usage").filter(|u| u.is_object()) {
+                            usage_value = Some(u.clone());
+                        }
 
                         let modified_data = serde_json::to_string(&event).unwrap_or_default();
                         let _ = tx.send(Ok(format!("data: {modified_data}\n"))).await;
@@ -130,8 +168,13 @@ async fn stream_response(resp: reqwest::Response, recorder: Recorder, request_id
             }
         }
 
-        if collected_response != Value::Null {
-            recorder.record_response(&request_id, &collected_response).await;
+        if has_data {
+            let assembled = assemble_openai_response(
+                &chunk_id, &chunk_model, chunk_created,
+                &response_text, &reasoning_text, &tool_calls,
+                finish_reason.as_deref(), usage_value,
+            );
+            recorder.record_response(&request_id, &assembled).await;
         }
     });
 
@@ -243,6 +286,73 @@ fn handle_inline_close_tags(
     }
 
     delta.as_object_mut().map(|d| d.remove("content"));
+}
+
+fn accumulate_tool_calls(tool_calls: &mut Vec<Value>, delta_tcs: &[Value]) {
+    for tc in delta_tcs {
+        let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+
+        while tool_calls.len() <= idx {
+            tool_calls.push(serde_json::json!({}));
+        }
+
+        let existing = &mut tool_calls[idx];
+
+        if let Some(id) = tc.get("id") {
+            existing["id"] = id.clone();
+        }
+        if let Some(t) = tc.get("type") {
+            existing["type"] = t.clone();
+        }
+        if let Some(func) = tc.get("function") {
+            if existing.get("function").is_none() {
+                existing["function"] = serde_json::json!({});
+            }
+            if let Some(name) = func.get("name") {
+                existing["function"]["name"] = name.clone();
+            }
+            if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
+                let current = existing["function"]["arguments"].as_str().unwrap_or("");
+                existing["function"]["arguments"] = Value::String(format!("{current}{args}"));
+            }
+        }
+    }
+}
+
+fn assemble_openai_response(
+    id: &str, model: &str, created: u64,
+    content: &str, reasoning: &str, tool_calls: &[Value],
+    finish_reason: Option<&str>, usage: Option<Value>,
+) -> Value {
+    let mut message = serde_json::Map::new();
+    message.insert("role".to_string(), Value::String("assistant".to_string()));
+    if !content.is_empty() {
+        message.insert("content".to_string(), Value::String(content.to_string()));
+    }
+    if !reasoning.is_empty() {
+        message.insert("reasoning_content".to_string(), Value::String(reasoning.to_string()));
+    }
+    if !tool_calls.is_empty() {
+        message.insert("tool_calls".to_string(), Value::Array(tool_calls.to_vec()));
+    }
+
+    let mut resp = serde_json::json!({
+        "id": id,
+        "object": "chat.completion",
+        "created": created,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": message,
+            "finish_reason": finish_reason
+        }]
+    });
+
+    if let Some(u) = usage {
+        resp["usage"] = u;
+    }
+
+    resp
 }
 
 fn inject_system_prompt(body: &mut Value, prompt: &str) {
