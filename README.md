@@ -1,88 +1,162 @@
 # OpenAI Proxy
 
-一个用于代理 OpenAI API 请求的服务，支持隐藏真实 API 密钥和记录请求响应。
+A proxy server for LLM APIs that supports both OpenAI and Anthropic backends. It hides real API keys from clients, maps model names to remote endpoints, and records all requests and responses.
 
-## 环境变量配置
+## Features
 
-### CONFIG_FILE_PATH
-设置配置文件路径，默认为 `${HOME}/.openai-proxy/model_mapping.json`
+- **Dual API support** — exposes both `/v1/chat/completions` (OpenAI format) and `/v1/messages` (Anthropic format). Automatically converts between formats when a client's request format doesn't match the backend type.
+- **Model mapping** — clients use local model names; the proxy replaces them with remote model/URL/token.
+- **Thinking support** — configurable per model with per-request overrides:
+  - Anthropic backends: native extended thinking (`budget_tokens`)
+  - OpenAI backends: `<think>` tag parsing → `reasoning_content` conversion
+- **Request recording** — saves request/response JSON to disk with automatic cleanup of old records.
+- **Streaming** — full SSE streaming support for both backends, including cross-format streaming conversion.
+- **YAML config** — all settings in a single `config.yaml` file.
 
-### RECORD_FILE_PATH
-设置请求记录文件目录，默认为 `${HOME}/.openai-proxy/records`
+## Build
 
-### URL_PREFIX
-通过设置 `URL_PREFIX` 环境变量可以为所有 API 添加公共前缀。
-
-```bash
-# 设置 URL 前缀为 /api
-export URL_PREFIX=/api
-
-# 启动服务
-./dist/openai-proxy
-```
-
-设置后，原本的 API 路径会变为：
-- `/v1/chat/completions` → `/api/v1/chat/completions`
-- `/v1/models` → `/api/v1/models`
-
-## 构建和运行
+Requires Rust toolchain. Install via [rustup](https://rustup.rs/).
 
 ```bash
-# 构建项目
+# Build release binary
 make build
+# Output: dist/openai-proxy
 
-# 运行服务
-./dist/openai-proxy
-
-# 或者直接运行（带调试模式）
-./dist/openai-proxy -d
+# Cross-compile for Linux x86_64
+make linux
+# Output: dist/linux-x86/openai-proxy
 ```
 
-## 使用示例
+## Configuration
 
-### 不使用前缀（默认）
+Copy the example config and fill in your API tokens:
+
 ```bash
+mkdir -p ~/.openai-proxy
+cp config.example.yaml ~/.openai-proxy/config.yaml
+```
+
+See [`config.example.yaml`](config.example.yaml) for all available options. A minimal config:
+
+```yaml
+backends:
+  openai:
+    - name: gpt-4o
+      url: https://api.openai.com/v1/chat/completions
+      api_token: sk-xxx
+      model: gpt-4o
+
+  anthropic:
+    - name: claude-sonnet
+      url: https://api.anthropic.com/v1/messages
+      api_token: sk-ant-xxx
+      model: claude-sonnet-4-20250514
+```
+
+## Usage
+
+```bash
+# Run with default config (~/.openai-proxy/config.yaml)
+./dist/openai-proxy
+
+# Specify config file, port, and debug mode
+./dist/openai-proxy --config /path/to/config.yaml --port 9000 --debug
+```
+
+### CLI flags
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--config` | `-c` | `~/.openai-proxy/config.yaml` | Path to YAML config file |
+| `--port` | `-p` | `8000` | Port to listen on (overrides config) |
+| `--debug` | `-d` | `false` | Enable debug logging (overrides config) |
+
+### API endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/v1/chat/completions` | POST | OpenAI-compatible chat completions |
+| `/v1/messages` | POST | Anthropic-compatible messages API |
+| `/v1/models` | GET | List all configured models |
+
+If `url_prefix` is set in config (e.g. `/api`), all routes are prefixed: `/api/v1/chat/completions`.
+
+### Examples
+
+```bash
+# OpenAI format (streaming)
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "stream": true
+  }'
+
+# Anthropic format
+curl -X POST http://localhost:8000/v1/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-sonnet",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
+
+# Anthropic format with thinking
+curl -X POST http://localhost:8000/v1/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-sonnet",
+    "max_tokens": 4096,
+    "messages": [{"role": "user", "content": "What is 15 * 37?"}],
+    "thinking": {"type": "enabled", "budget_tokens": 5000}
+  }'
+
+# List models
 curl http://localhost:8000/v1/models
 ```
 
-### 使用前缀
-```bash
-export URL_PREFIX=/api
-./dist/openai-proxy
+### Thinking per-request override
 
-# 请求时需要加上前缀
-curl http://localhost:8000/api/v1/models
+Clients can override per-model thinking defaults in the request body:
+
+**OpenAI format** (`/v1/chat/completions`):
+```json
+{
+  "model": "claude-sonnet",
+  "messages": [...],
+  "thinking": {"enabled": true, "budget_tokens": 8000}
+}
 ```
 
-## Linux systemd 服务
+**Anthropic format** (`/v1/messages`):
+```json
+{
+  "model": "claude-sonnet",
+  "messages": [...],
+  "thinking": {"type": "enabled", "budget_tokens": 8000}
+}
+```
 
-如果需要在 Linux 服务器上作为系统服务运行，可以使用 systemd。
-
-复制 systemd 服务文件：
+## Linux systemd service
 
 ```bash
-sudo cp openai-proxy.service /etc/systemd/system/
+# Create service user
+sudo useradd -r -s /sbin/nologin model-server
+
+# Deploy
+sudo mkdir -p /opt/model-server/records
+sudo cp dist/openai-proxy /opt/model-server/
+sudo cp config.yaml /opt/model-server/
+sudo chown -R model-server:model-server /opt/model-server
+
+# Install and start service
+sudo cp model-server.service /etc/systemd/system/
 sudo systemctl daemon-reload
-```
+sudo systemctl enable --now model-server
 
-### 使用
-
-```bash
-# 启动服务
-sudo systemctl start openai-proxy
-
-# 设置开机自启
-sudo systemctl enable openai-proxy
-
-# 查看服务状态
-sudo systemctl status openai-proxy
-
-# 查看日志
-sudo journalctl -u openai-proxy -f
-
-# 重启服务
-sudo systemctl restart openai-proxy
-
-# 停止服务
-sudo systemctl stop openai-proxy
+# Manage
+sudo systemctl status model-server
+sudo journalctl -u model-server -f
+sudo systemctl restart model-server
 ```
