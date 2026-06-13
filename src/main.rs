@@ -12,7 +12,7 @@ use clap::Parser;
 use tracing::info;
 
 #[derive(Parser)]
-#[command(name = "openai-proxy", about = "OpenAI/Anthropic API proxy server")]
+#[command(name = "model-proxy", about = "Model proxy server for OpenAI and Anthropic APIs")]
 struct Cli {
     /// Enable debug mode with verbose logging
     #[arg(short, long)]
@@ -23,7 +23,7 @@ struct Cli {
     port: u16,
 
     /// Path to YAML config file
-    #[arg(short, long, default_value = "~/.openai-proxy/config.yaml")]
+    #[arg(short, long, default_value = "~/.model-proxy/config.yaml")]
     config: String,
 }
 

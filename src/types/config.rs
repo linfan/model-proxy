@@ -53,7 +53,7 @@ impl Default for RecordConfig {
 
 fn default_record_path() -> String {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    format!("{home}/.openai-proxy/records")
+    format!("{home}/.model-proxy/records")
 }
 
 fn default_max_count() -> usize {

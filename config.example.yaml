@@ -14,7 +14,7 @@ server:
 record:
   # Directory to store recorded request/response JSON files
   # Supports ~ for home directory
-  path: ~/.openai-proxy/records
+  path: ~/.model-proxy/records
 
   # Maximum number of record groups to keep (oldest are cleaned up)
   # Set to 0 to disable recording entirely

@@ -1,4 +1,4 @@
-# OpenAI Proxy
+# Model Proxy
 
 A proxy server for LLM APIs that supports both OpenAI and Anthropic backends. It hides real API keys from clients, maps model names to remote endpoints, and records all requests and responses.
 
@@ -20,11 +20,11 @@ Requires Rust toolchain. Install via [rustup](https://rustup.rs/).
 ```bash
 # Build release binary
 make build
-# Output: dist/openai-proxy
+# Output: dist/model-proxy
 
 # Cross-compile for Linux x86_64
 make linux
-# Output: dist/linux-x86/openai-proxy
+# Output: dist/linux-x86/model-proxy
 ```
 
 ## Configuration
@@ -32,8 +32,8 @@ make linux
 Copy the example config and fill in your API tokens:
 
 ```bash
-mkdir -p ~/.openai-proxy
-cp config.example.yaml ~/.openai-proxy/config.yaml
+mkdir -p ~/.model-proxy
+cp config.example.yaml ~/.model-proxy/config.yaml
 ```
 
 See [`config.example.yaml`](config.example.yaml) for all available options. A minimal config:
@@ -56,18 +56,18 @@ backends:
 ## Usage
 
 ```bash
-# Run with default config (~/.openai-proxy/config.yaml)
-./dist/openai-proxy
+# Run with default config (~/.model-proxy/config.yaml)
+./dist/model-proxy
 
 # Specify config file, port, and debug mode
-./dist/openai-proxy --config /path/to/config.yaml --port 9000 --debug
+./dist/model-proxy --config /path/to/config.yaml --port 9000 --debug
 ```
 
 ### CLI flags
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
-| `--config` | `-c` | `~/.openai-proxy/config.yaml` | Path to YAML config file |
+| `--config` | `-c` | `~/.model-proxy/config.yaml` | Path to YAML config file |
 | `--port` | `-p` | `8000` | Port to listen on (overrides config) |
 | `--debug` | `-d` | `false` | Enable debug logging (overrides config) |
 
@@ -146,7 +146,7 @@ sudo useradd -r -s /sbin/nologin model-server
 
 # Deploy
 sudo mkdir -p /opt/model-server/records
-sudo cp dist/openai-proxy /opt/model-server/
+sudo cp dist/model-proxy /opt/model-server/
 sudo cp config.yaml /opt/model-server/
 sudo chown -R model-server:model-server /opt/model-server
 
