@@ -1,0 +1,84 @@
+# ─── Server settings ───────────────────────────────────────────────
+server:
+  # Port to listen on (default: 8000, overridden by --port CLI flag)
+  port: 8000
+
+  # URL prefix for all routes (e.g. "/api" → /api/v1/chat/completions)
+  # Leave empty for no prefix
+  url_prefix: ""
+
+  # Enable debug logging (overridden by --debug CLI flag)
+  debug: false
+
+# ─── Request/response recording ───────────────────────────────────
+record:
+  # Directory to store recorded request/response JSON files
+  # Supports ~ for home directory
+  path: ~/.openai-proxy/records
+
+  # Maximum number of record groups to keep (oldest are cleaned up)
+  # Set to 0 to disable recording entirely
+  max_count: 1000
+
+# ─── Backend model definitions ────────────────────────────────────
+# Models are grouped by backend type. Each model entry maps a local
+# model name (used by clients) to a remote API endpoint.
+#
+# Clients send requests using the local model name. The proxy
+# replaces it with the remote model name and forwards to the
+# configured URL.
+#
+# Both /v1/chat/completions (OpenAI format) and /v1/messages
+# (Anthropic format) endpoints are exposed. When a client hits
+# an endpoint whose format doesn't match the backend type, the
+# proxy automatically converts between formats.
+
+backends:
+  # ── OpenAI-compatible backends ────────────────────────────────
+  openai:
+    - name: gpt-4o             # Local model name (what clients send)
+      url: https://api.openai.com/v1/chat/completions
+      api_token: sk-xxx         # Bearer token for Authorization header
+      model: gpt-4o             # Remote model name sent to the API
+      system_prompt: ""         # Optional: injected as first system message
+
+    - name: qwen
+      url: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+      api_token: sk-xxx
+      model: qwen-plus
+      # system_prompt is optional; omit or set to "" to skip injection
+
+    - name: deepseek
+      url: https://api.deepseek.com/v1/chat/completions
+      api_token: sk-xxx
+      model: deepseek-chat
+      # For models that emit <think>...</think> tags in streaming
+      # responses, the proxy automatically converts them to
+      # reasoning_content fields (no config needed)
+
+  # ── Anthropic backends ────────────────────────────────────────
+  anthropic:
+    - name: claude-sonnet
+      url: https://api.anthropic.com/v1/messages
+      api_token: sk-ant-xxx     # Used as x-api-key header
+      model: claude-sonnet-4-20250514
+      system_prompt: ""
+      thinking:                 # Per-model thinking defaults
+        enabled: true           # Enable extended thinking
+        budget_tokens: 10000    # Max tokens for thinking output
+
+    - name: claude-haiku
+      url: https://api.anthropic.com/v1/messages
+      api_token: sk-ant-xxx
+      model: claude-haiku-4-5-20251001
+      # thinking is optional; omit to disable thinking by default
+      # Clients can still enable it per-request:
+      #   "thinking": {"type": "enabled", "budget_tokens": 5000}
+
+    - name: claude-opus
+      url: https://api.anthropic.com/v1/messages
+      api_token: sk-ant-xxx
+      model: claude-opus-4-20250514
+      thinking:
+        enabled: false          # Disabled by default, clients can override
+        budget_tokens: 16000    # Budget used when client enables thinking

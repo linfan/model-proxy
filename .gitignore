@@ -1,0 +1,26 @@
+# Rust
+target/
+
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Mac
+.DS_Store
+
+# IDE
+.idea/
+.theia/
+.vscode/
+*.iml
+
+# Config (may contain secrets)
+config.yaml
+
+# Extra
+vendor/
+note/
+dist/
+test/
