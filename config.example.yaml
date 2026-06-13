@@ -52,9 +52,18 @@ backends:
       url: https://api.deepseek.com/v1/chat/completions
       api_token: sk-xxx
       model: deepseek-chat
-      # For models that emit <think>...</think> tags in streaming
-      # responses, the proxy automatically converts them to
-      # reasoning_content fields (no config needed)
+      thinking:
+        enabled: true           # Parse <think>...</think> tags in streaming
+                                # responses and convert to reasoning_content.
+                                # Set to false to pass content through raw.
+        # budget_tokens is ignored for OpenAI backends (only used by Anthropic)
+
+    - name: o3-mini
+      url: https://api.openai.com/v1/chat/completions
+      api_token: sk-xxx
+      model: o3-mini
+      thinking:
+        enabled: false          # No <think> tag parsing needed for this model
 
   # ── Anthropic backends ────────────────────────────────────────
   anthropic:

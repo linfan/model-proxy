@@ -17,7 +17,7 @@ pub async fn forward_chat_completion(
     client: &Client,
     model: &ResolvedModel,
     mut request: ChatCompletionRequest,
-    _thinking: &ThinkingSettings,
+    thinking: &ThinkingSettings,
     recorder: &Recorder,
     request_id: &str,
 ) -> Response {
@@ -68,7 +68,7 @@ pub async fn forward_chat_completion(
     }
 
     if is_stream {
-        stream_response(resp, recorder.clone(), request_id.to_string()).await
+        stream_response(resp, recorder.clone(), request_id.to_string(), thinking.enabled).await
     } else {
         non_stream_response(resp, recorder, request_id).await
     }
@@ -86,7 +86,7 @@ async fn non_stream_response(resp: reqwest::Response, recorder: &Recorder, reque
     axum::Json(body).into_response()
 }
 
-async fn stream_response(resp: reqwest::Response, recorder: Recorder, request_id: String) -> Response {
+async fn stream_response(resp: reqwest::Response, recorder: Recorder, request_id: String, parse_think_tags: bool) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(64);
 
     tokio::spawn(async move {
@@ -123,7 +123,9 @@ async fn stream_response(resp: reqwest::Response, recorder: Recorder, request_id
                     }
 
                     if let Ok(mut event) = serde_json::from_str::<Value>(data) {
-                        process_think_tags(&mut event, &mut in_think_block, &mut response_text, &mut reasoning_text);
+                        if parse_think_tags {
+                            process_think_tags(&mut event, &mut in_think_block, &mut response_text, &mut reasoning_text);
+                        }
                         collected_response = event.clone();
 
                         let modified_data = serde_json::to_string(&event).unwrap_or_default();
