@@ -2,6 +2,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use serde_json::Value;
 use tracing::debug;
 
 use crate::proxy::anthropic;
@@ -17,12 +18,16 @@ use crate::types::openai::*;
 
 pub async fn handle_chat_completions(
     State(state): State<AppState>,
-    Json(request): Json<ChatCompletionRequest>,
+    Json(body): Json<Value>,
 ) -> Response {
     let request_id = generate_request_id();
-    let model_name = &request.model;
 
-    let resolved = match state.config.resolve_model(model_name) {
+    let model_name = match body.get("model").and_then(|v| v.as_str()) {
+        Some(name) => name.to_string(),
+        None => return proxy_error(StatusCode::BAD_REQUEST, "missing 'model' field"),
+    };
+
+    let resolved = match state.config.resolve_model(&model_name) {
         Some(m) => m,
         None => {
             return proxy_error(
@@ -40,7 +45,7 @@ pub async fn handle_chat_completions(
             openai_proxy::forward_chat_completion(
                 &state.http_client,
                 resolved,
-                request,
+                body,
                 &thinking,
                 &state.recorder,
                 &request_id,
@@ -48,6 +53,10 @@ pub async fn handle_chat_completions(
             .await
         }
         BackendType::Anthropic => {
+            let request: ChatCompletionRequest = match serde_json::from_value(body) {
+                Ok(r) => r,
+                Err(e) => return proxy_error(StatusCode::BAD_REQUEST, &format!("invalid request: {e}")),
+            };
             anthropic::forward_chat_via_anthropic(
                 &state.http_client,
                 resolved,
@@ -65,12 +74,16 @@ pub async fn handle_chat_completions(
 
 pub async fn handle_messages(
     State(state): State<AppState>,
-    Json(request): Json<MessagesRequest>,
+    Json(body): Json<Value>,
 ) -> Response {
     let request_id = generate_request_id();
-    let model_name = &request.model;
 
-    let resolved = match state.config.resolve_model(model_name) {
+    let model_name = match body.get("model").and_then(|v| v.as_str()) {
+        Some(name) => name.to_string(),
+        None => return proxy_error(StatusCode::BAD_REQUEST, "missing 'model' field"),
+    };
+
+    let resolved = match state.config.resolve_model(&model_name) {
         Some(m) => m,
         None => {
             return proxy_error(
@@ -88,7 +101,7 @@ pub async fn handle_messages(
             anthropic::forward_messages(
                 &state.http_client,
                 resolved,
-                request,
+                body,
                 &thinking,
                 &state.recorder,
                 &request_id,
@@ -96,6 +109,10 @@ pub async fn handle_messages(
             .await
         }
         BackendType::OpenAI => {
+            let request: MessagesRequest = match serde_json::from_value(body) {
+                Ok(r) => r,
+                Err(e) => return proxy_error(StatusCode::BAD_REQUEST, &format!("invalid request: {e}")),
+            };
             anthropic::forward_messages_via_openai(
                 &state.http_client,
                 resolved,

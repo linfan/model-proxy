@@ -20,30 +20,27 @@ use super::{proxy_error, ThinkingSettings};
 pub async fn forward_messages(
     client: &Client,
     model: &ResolvedModel,
-    mut request: MessagesRequest,
+    mut body: Value,
     thinking: &ThinkingSettings,
     recorder: &Recorder,
     request_id: &str,
 ) -> Response {
-    request.model = model.entry.model.clone();
+    body["model"] = Value::String(model.entry.model.clone());
 
     if let Some(sp) = &model.entry.system_prompt {
-        if !sp.is_empty() && request.system.is_none() {
-            request.system = Some(SystemContent::Text(sp.clone()));
+        if !sp.is_empty() && body.get("system").is_none() {
+            body["system"] = Value::String(sp.clone());
         }
     }
 
-    if thinking.enabled && request.thinking.is_none() {
-        request.thinking = Some(AnthropicThinking {
-            thinking_type: "enabled".to_string(),
-            budget_tokens: thinking.budget_tokens,
-        });
+    if thinking.enabled && body.get("thinking").is_none() {
+        let mut thinking_obj = serde_json::Map::new();
+        thinking_obj.insert("type".to_string(), Value::String("enabled".to_string()));
+        if let Some(budget) = thinking.budget_tokens {
+            thinking_obj.insert("budget_tokens".to_string(), Value::Number(budget.into()));
+        }
+        body["thinking"] = Value::Object(thinking_obj);
     }
-
-    let body = match serde_json::to_value(&request) {
-        Ok(v) => v,
-        Err(e) => return proxy_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("serialize error: {e}")),
-    };
 
     debug!("Anthropic request: {}", serde_json::to_string_pretty(&body).unwrap_or_default());
 
@@ -63,7 +60,7 @@ pub async fn forward_messages(
     };
 
     let status = resp.status();
-    let is_stream = request.stream.unwrap_or(false);
+    let is_stream = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
     if !status.is_success() {
         let err_body = resp.text().await.unwrap_or_default();

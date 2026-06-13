@@ -9,30 +9,24 @@ use tracing::debug;
 
 use crate::record::Recorder;
 use crate::types::config::ResolvedModel;
-use crate::types::openai::*;
 
 use super::{proxy_error, ThinkingSettings};
 
 pub async fn forward_chat_completion(
     client: &Client,
     model: &ResolvedModel,
-    mut request: ChatCompletionRequest,
+    mut body: Value,
     thinking: &ThinkingSettings,
     recorder: &Recorder,
     request_id: &str,
 ) -> Response {
-    request.model = model.entry.model.clone();
+    body["model"] = Value::String(model.entry.model.clone());
 
     if let Some(sp) = &model.entry.system_prompt {
         if !sp.is_empty() {
-            inject_system_prompt(&mut request, sp);
+            inject_system_prompt(&mut body, sp);
         }
     }
-
-    let body = match serde_json::to_value(&request) {
-        Ok(v) => v,
-        Err(e) => return proxy_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("serialize error: {e}")),
-    };
 
     debug!("OpenAI request: {} {}\n{}", "POST", &model.entry.url, serde_json::to_string_pretty(&body).unwrap_or_default());
 
@@ -51,7 +45,7 @@ pub async fn forward_chat_completion(
     };
 
     let status = resp.status();
-    let is_stream = request.stream.unwrap_or(false);
+    let is_stream = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
     if !status.is_success() {
         let err_body = resp.text().await.unwrap_or_default();
@@ -251,22 +245,18 @@ fn handle_inline_close_tags(
     delta.as_object_mut().map(|d| d.remove("content"));
 }
 
-fn inject_system_prompt(request: &mut ChatCompletionRequest, prompt: &str) {
-    if request.messages.is_empty() {
+fn inject_system_prompt(body: &mut Value, prompt: &str) {
+    let messages = match body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        Some(m) => m,
+        None => return,
+    };
+    if messages.is_empty() {
         return;
     }
-    if request.messages[0].role == "user" {
-        request.messages.insert(
-            0,
-            ChatMessage {
-                role: "system".to_string(),
-                content: Some(Value::String(prompt.to_string())),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-                reasoning_content: None,
-                extra: Default::default(),
-            },
-        );
+    if messages[0].get("role").and_then(|r| r.as_str()) == Some("user") {
+        messages.insert(0, serde_json::json!({
+            "role": "system",
+            "content": prompt,
+        }));
     }
 }
