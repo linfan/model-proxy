@@ -1,5 +1,5 @@
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::Value;
@@ -18,9 +18,11 @@ use crate::types::openai::*;
 
 pub async fn handle_chat_completions(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
     let request_id = generate_request_id();
+    let session_id = extract_session_id(&headers);
 
     let model_name = match body.get("model").and_then(|v| v.as_str()) {
         Some(name) => name.to_string(),
@@ -49,6 +51,7 @@ pub async fn handle_chat_completions(
                 &thinking,
                 &state.recorder,
                 &request_id,
+                session_id.as_deref(),
             )
             .await
         }
@@ -64,6 +67,7 @@ pub async fn handle_chat_completions(
                 &thinking,
                 &state.recorder,
                 &request_id,
+                session_id.as_deref(),
             )
             .await
         }
@@ -74,9 +78,11 @@ pub async fn handle_chat_completions(
 
 pub async fn handle_messages(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
     let request_id = generate_request_id();
+    let session_id = extract_session_id(&headers);
 
     let model_name = match body.get("model").and_then(|v| v.as_str()) {
         Some(name) => name.to_string(),
@@ -105,6 +111,7 @@ pub async fn handle_messages(
                 &thinking,
                 &state.recorder,
                 &request_id,
+                session_id.as_deref(),
             )
             .await
         }
@@ -119,6 +126,7 @@ pub async fn handle_messages(
                 &request,
                 &state.recorder,
                 &request_id,
+                session_id.as_deref(),
             )
             .await
         }
@@ -146,4 +154,11 @@ pub async fn handle_list_models(State(state): State<AppState>) -> impl IntoRespo
         object: "list".to_string(),
         data: models,
     })
+}
+
+fn extract_session_id(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-session-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
 }

@@ -37,11 +37,11 @@ impl Recorder {
         });
     }
 
-    pub async fn record_request(&self, request_id: &str, headers: &str, body: &Value) {
+    pub async fn record_request(&self, request_id: &str, session_id: Option<&str>, headers: &str, body: &Value) {
         if self.max_count == 0 {
             return;
         }
-        let filename = self.filename(request_id, "sent");
+        let filename = self.filename(request_id, "sent", session_id).await;
         let body_str = serde_json::to_string_pretty(body).unwrap_or_default();
         let content = format!("{headers}\n\n{body_str}");
         if let Err(e) = fs::write(&filename, content).await {
@@ -49,11 +49,11 @@ impl Recorder {
         }
     }
 
-    pub async fn record_response(&self, request_id: &str, headers: &str, body: &Value) {
+    pub async fn record_response(&self, request_id: &str, session_id: Option<&str>, headers: &str, body: &Value) {
         if self.max_count == 0 {
             return;
         }
-        let filename = self.filename(request_id, "recv");
+        let filename = self.filename(request_id, "recv", session_id).await;
         let body_str = serde_json::to_string_pretty(body).unwrap_or_default();
         let content = format!("{headers}\n\n{body_str}");
         if let Err(e) = fs::write(&filename, content).await {
@@ -61,23 +61,45 @@ impl Recorder {
         }
     }
 
-    fn filename(&self, request_id: &str, tag: &str) -> PathBuf {
+    async fn filename(&self, request_id: &str, tag: &str, session_id: Option<&str>) -> PathBuf {
         let now = chrono_format_now();
-        self.dir.join(format!("{now}_{tag}_{request_id}.json"))
+        let subdir = match session_id {
+            Some(id) => self.dir.join(id),
+            None => {
+                let date = date_today();
+                self.dir.join(format!("unknown-session-{date}"))
+            }
+        };
+        let _ = fs::create_dir_all(&subdir).await;
+        subdir.join(format!("{now}_{tag}_{request_id}.json"))
     }
 
     async fn cleanup(&self) {
-        let mut entries = match fs::read_dir(&self.dir).await {
+        let mut top_entries = match fs::read_dir(&self.dir).await {
             Ok(e) => e,
             Err(_) => return,
         };
 
-        let mut files: Vec<(String, PathBuf)> = Vec::new();
-        while let Ok(Some(entry)) = entries.next_entry().await {
+        let mut subdirs: Vec<PathBuf> = Vec::new();
+        while let Ok(Some(entry)) = top_entries.next_entry().await {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                let name = entry.file_name().to_string_lossy().to_string();
-                files.push((name, path));
+            if path.is_dir() {
+                subdirs.push(path);
+            }
+        }
+
+        let mut files: Vec<(String, PathBuf)> = Vec::new();
+        for subdir in &subdirs {
+            let mut entries = match fs::read_dir(subdir).await {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    files.push((name, path));
+                }
             }
         }
 
@@ -86,8 +108,6 @@ impl Recorder {
         for (name, path) in &files {
             let parts: Vec<&str> = name.rsplitn(2, '_').collect();
             if parts.len() >= 2 {
-                let _key = parts[1].to_string();
-                // Use the full timestamp+requestid minus tag as group key
                 let group_key = name
                     .strip_suffix(".json")
                     .unwrap_or(name)
@@ -115,8 +135,30 @@ impl Recorder {
             }
         }
 
+        // Remove empty subdirectories
+        for subdir in &subdirs {
+            let mut entries = match fs::read_dir(subdir).await {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            if entries.next_entry().await.ok().flatten().is_none() {
+                let _ = fs::remove_dir(subdir).await;
+            }
+        }
+
         debug!("cleaned up {delete_count} old record groups");
     }
+}
+
+fn date_today() -> String {
+    use std::time::SystemTime;
+    let secs = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let days = secs / 86400;
+    let (year, month, day) = days_to_ymd(days);
+    format!("{year:04}{month:02}{day:02}")
 }
 
 fn chrono_format_now() -> String {

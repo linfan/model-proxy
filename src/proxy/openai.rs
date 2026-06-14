@@ -19,6 +19,7 @@ pub async fn forward_chat_completion(
     thinking: &ThinkingSettings,
     recorder: &Recorder,
     request_id: &str,
+    session_id: Option<&str>,
 ) -> Response {
     body["model"] = Value::String(model.entry.model.clone());
 
@@ -34,7 +35,7 @@ pub async fn forward_chat_completion(
         "POST {}\nAuthorization: Bearer {}\nContent-Type: application/json",
         &model.entry.url, &model.entry.api_token
     );
-    recorder.record_request(request_id, &req_headers, &body).await;
+    recorder.record_request(request_id, session_id, &req_headers, &body).await;
 
     let resp = match client
         .post(&model.entry.url)
@@ -63,26 +64,27 @@ pub async fn forward_chat_completion(
     }
 
     let resp_headers = format_response_headers(&resp);
+    let sid = session_id.map(|s| s.to_string());
     if is_stream {
-        stream_response(resp, recorder.clone(), request_id.to_string(), thinking.enabled, resp_headers).await
+        stream_response(resp, recorder.clone(), request_id.to_string(), thinking.enabled, resp_headers, sid).await
     } else {
-        non_stream_response_with_headers(resp, recorder, request_id, resp_headers).await
+        non_stream_response_with_headers(resp, recorder, request_id, resp_headers, sid.as_deref()).await
     }
 }
 
-async fn non_stream_response_with_headers(resp: reqwest::Response, recorder: &Recorder, request_id: &str, resp_headers: String) -> Response {
+async fn non_stream_response_with_headers(resp: reqwest::Response, recorder: &Recorder, request_id: &str, resp_headers: String, session_id: Option<&str>) -> Response {
     let body: Value = match resp.json().await {
         Ok(v) => v,
         Err(e) => return proxy_error(StatusCode::BAD_GATEWAY, &format!("decode error: {e}")),
     };
 
     debug!("OpenAI response: {}", serde_json::to_string_pretty(&body).unwrap_or_default());
-    recorder.record_response(request_id, &resp_headers, &body).await;
+    recorder.record_response(request_id, session_id, &resp_headers, &body).await;
 
     axum::Json(body).into_response()
 }
 
-async fn stream_response(resp: reqwest::Response, recorder: Recorder, request_id: String, parse_think_tags: bool, resp_headers: String) -> Response {
+async fn stream_response(resp: reqwest::Response, recorder: Recorder, request_id: String, parse_think_tags: bool, resp_headers: String, session_id: Option<String>) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(64);
 
     tokio::spawn(async move {
@@ -179,7 +181,7 @@ async fn stream_response(resp: reqwest::Response, recorder: Recorder, request_id
                 &response_text, &reasoning_text, &tool_calls,
                 finish_reason.as_deref(), usage_value,
             );
-            recorder.record_response(&request_id, &resp_headers, &assembled).await;
+            recorder.record_response(&request_id, session_id.as_deref(), &resp_headers, &assembled).await;
         }
     });
 
