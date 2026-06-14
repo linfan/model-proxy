@@ -9,7 +9,7 @@ use crate::types::config::ResolvedModel;
 
 #[derive(Debug, Clone)]
 pub struct ThinkingSettings {
-    pub enabled: bool,
+    pub enabled: Option<bool>,
     pub budget_tokens: Option<u32>,
 }
 
@@ -17,11 +17,11 @@ impl ThinkingSettings {
     pub fn from_config(model: &ResolvedModel) -> Self {
         match model.entry.thinking.as_ref() {
             Some(cfg) => Self {
-                enabled: cfg.enabled,
+                enabled: Some(cfg.enabled),
                 budget_tokens: cfg.budget_tokens,
             },
             None => Self {
-                enabled: false,
+                enabled: None,
                 budget_tokens: None,
             },
         }

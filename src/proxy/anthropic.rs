@@ -34,7 +34,7 @@ pub async fn forward_messages(
         }
     }
 
-    if thinking.enabled && body.get("thinking").is_none() {
+    if thinking.enabled == Some(true) && body.get("thinking").is_none() {
         let mut thinking_obj = serde_json::Map::new();
         thinking_obj.insert("type".to_string(), Value::String("enabled".to_string()));
         if let Some(budget) = thinking.budget_tokens {

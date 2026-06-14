@@ -72,7 +72,7 @@ pub fn openai_to_anthropic_request(
 
     let max_tokens = req.max_tokens.unwrap_or(4096);
 
-    let anthropic_thinking = if thinking.enabled {
+    let anthropic_thinking = if thinking.enabled == Some(true) {
         Some(AnthropicThinking {
             thinking_type: "enabled".to_string(),
             budget_tokens: thinking.budget_tokens,

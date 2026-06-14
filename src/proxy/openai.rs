@@ -29,6 +29,19 @@ pub async fn forward_chat_completion(
         }
     }
 
+    if let Some(enabled) = thinking.enabled {
+        if body.get("enable_thinking").is_none() {
+            body["enable_thinking"] = Value::Bool(enabled);
+        }
+        if enabled {
+            if let Some(budget) = thinking.budget_tokens {
+                if body.get("thinking_budget").is_none() {
+                    body["thinking_budget"] = Value::Number(budget.into());
+                }
+            }
+        }
+    }
+
     debug!("OpenAI request: {} {}\n{}", "POST", &model.entry.url, serde_json::to_string_pretty(&body).unwrap_or_default());
 
     let req_headers = format!(
@@ -66,7 +79,7 @@ pub async fn forward_chat_completion(
     let resp_headers = format_response_headers(&resp);
     let sid = session_id.map(|s| s.to_string());
     if is_stream {
-        stream_response(resp, recorder.clone(), request_id.to_string(), thinking.enabled, resp_headers, sid).await
+        stream_response(resp, recorder.clone(), request_id.to_string(), thinking.enabled == Some(true), resp_headers, sid).await
     } else {
         non_stream_response_with_headers(resp, recorder, request_id, resp_headers, sid.as_deref()).await
     }
