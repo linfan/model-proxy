@@ -63,12 +63,10 @@ impl Recorder {
 
     async fn filename(&self, request_id: &str, tag: &str, session_id: Option<&str>) -> PathBuf {
         let now = chrono_format_now();
+        let date = date_today();
         let subdir = match session_id {
-            Some(id) => self.dir.join(id),
-            None => {
-                let date = date_today();
-                self.dir.join(format!("unknown-session-{date}"))
-            }
+            Some(id) => self.dir.join(format!("{date}_{id}")),
+            None => self.dir.join(format!("{date}_unknown-session")),
         };
         let _ = fs::create_dir_all(&subdir).await;
         subdir.join(format!("{now}_{tag}_{request_id}.json"))
