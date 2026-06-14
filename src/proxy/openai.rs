@@ -30,7 +30,11 @@ pub async fn forward_chat_completion(
 
     debug!("OpenAI request: {} {}\n{}", "POST", &model.entry.url, serde_json::to_string_pretty(&body).unwrap_or_default());
 
-    recorder.record_request(request_id, &body).await;
+    let req_headers = format!(
+        "POST {}\nAuthorization: Bearer {}\nContent-Type: application/json",
+        &model.entry.url, &model.entry.api_token
+    );
+    recorder.record_request(request_id, &req_headers, &body).await;
 
     let resp = match client
         .post(&model.entry.url)
@@ -58,26 +62,27 @@ pub async fn forward_chat_completion(
             .into_response();
     }
 
+    let resp_headers = format_response_headers(&resp);
     if is_stream {
-        stream_response(resp, recorder.clone(), request_id.to_string(), thinking.enabled).await
+        stream_response(resp, recorder.clone(), request_id.to_string(), thinking.enabled, resp_headers).await
     } else {
-        non_stream_response(resp, recorder, request_id).await
+        non_stream_response_with_headers(resp, recorder, request_id, resp_headers).await
     }
 }
 
-async fn non_stream_response(resp: reqwest::Response, recorder: &Recorder, request_id: &str) -> Response {
+async fn non_stream_response_with_headers(resp: reqwest::Response, recorder: &Recorder, request_id: &str, resp_headers: String) -> Response {
     let body: Value = match resp.json().await {
         Ok(v) => v,
         Err(e) => return proxy_error(StatusCode::BAD_GATEWAY, &format!("decode error: {e}")),
     };
 
     debug!("OpenAI response: {}", serde_json::to_string_pretty(&body).unwrap_or_default());
-    recorder.record_response(request_id, &body).await;
+    recorder.record_response(request_id, &resp_headers, &body).await;
 
     axum::Json(body).into_response()
 }
 
-async fn stream_response(resp: reqwest::Response, recorder: Recorder, request_id: String, parse_think_tags: bool) -> Response {
+async fn stream_response(resp: reqwest::Response, recorder: Recorder, request_id: String, parse_think_tags: bool, resp_headers: String) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(64);
 
     tokio::spawn(async move {
@@ -174,7 +179,7 @@ async fn stream_response(resp: reqwest::Response, recorder: Recorder, request_id
                 &response_text, &reasoning_text, &tool_calls,
                 finish_reason.as_deref(), usage_value,
             );
-            recorder.record_response(&request_id, &assembled).await;
+            recorder.record_response(&request_id, &resp_headers, &assembled).await;
         }
     });
 
@@ -353,6 +358,16 @@ fn assemble_openai_response(
     }
 
     resp
+}
+
+fn format_response_headers(resp: &reqwest::Response) -> String {
+    let mut lines = vec![format!("HTTP/1.1 {}", resp.status())];
+    for (name, value) in resp.headers() {
+        if let Ok(v) = value.to_str() {
+            lines.push(format!("{}: {}", name, v));
+        }
+    }
+    lines.join("\n")
 }
 
 fn inject_system_prompt(body: &mut Value, prompt: &str) {

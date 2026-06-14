@@ -37,23 +37,25 @@ impl Recorder {
         });
     }
 
-    pub async fn record_request(&self, request_id: &str, body: &Value) {
+    pub async fn record_request(&self, request_id: &str, headers: &str, body: &Value) {
         if self.max_count == 0 {
             return;
         }
         let filename = self.filename(request_id, "sent");
-        let content = serde_json::to_string_pretty(body).unwrap_or_default();
+        let body_str = serde_json::to_string_pretty(body).unwrap_or_default();
+        let content = format!("{headers}\n\n{body_str}");
         if let Err(e) = fs::write(&filename, content).await {
             warn!("failed to record request: {e}");
         }
     }
 
-    pub async fn record_response(&self, request_id: &str, body: &Value) {
+    pub async fn record_response(&self, request_id: &str, headers: &str, body: &Value) {
         if self.max_count == 0 {
             return;
         }
         let filename = self.filename(request_id, "recv");
-        let content = serde_json::to_string_pretty(body).unwrap_or_default();
+        let body_str = serde_json::to_string_pretty(body).unwrap_or_default();
+        let content = format!("{headers}\n\n{body_str}");
         if let Err(e) = fs::write(&filename, content).await {
             warn!("failed to record response: {e}");
         }

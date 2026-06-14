@@ -44,7 +44,11 @@ pub async fn forward_messages(
 
     debug!("Anthropic request: {}", serde_json::to_string_pretty(&body).unwrap_or_default());
 
-    recorder.record_request(request_id, &body).await;
+    let req_headers = format!(
+        "POST {}\nx-api-key: {}\nanthropic-version: 2023-06-01\nContent-Type: application/json",
+        &model.entry.url, &model.entry.api_token
+    );
+    recorder.record_request(request_id, &req_headers, &body).await;
 
     let resp = match client
         .post(&model.entry.url)
@@ -73,10 +77,11 @@ pub async fn forward_messages(
             .into_response();
     }
 
+    let resp_headers = format_response_headers(&resp);
     if is_stream {
-        stream_anthropic_passthrough(resp, recorder.clone(), request_id.to_string()).await
+        stream_anthropic_passthrough(resp, recorder.clone(), request_id.to_string(), resp_headers).await
     } else {
-        non_stream_anthropic(resp, recorder, request_id).await
+        non_stream_anthropic(resp, recorder, request_id, resp_headers).await
     }
 }
 
@@ -106,7 +111,11 @@ pub async fn forward_chat_via_anthropic(
 
     debug!("Anthropic request (via OpenAI endpoint): {}", serde_json::to_string_pretty(&body).unwrap_or_default());
 
-    recorder.record_request(request_id, &body).await;
+    let req_headers = format!(
+        "POST {}\nx-api-key: {}\nanthropic-version: 2023-06-01\nContent-Type: application/json",
+        &model.entry.url, &model.entry.api_token
+    );
+    recorder.record_request(request_id, &req_headers, &body).await;
 
     let resp = match client
         .post(&model.entry.url)
@@ -134,10 +143,11 @@ pub async fn forward_chat_via_anthropic(
             .into_response();
     }
 
+    let resp_headers = format_response_headers(&resp);
     if is_stream {
-        stream_anthropic_to_openai(resp, recorder.clone(), request_id.to_string()).await
+        stream_anthropic_to_openai(resp, recorder.clone(), request_id.to_string(), resp_headers).await
     } else {
-        non_stream_anthropic_to_openai(resp, recorder, request_id).await
+        non_stream_anthropic_to_openai(resp, recorder, request_id, resp_headers).await
     }
 }
 
@@ -160,7 +170,11 @@ pub async fn forward_messages_via_openai(
 
     debug!("OpenAI request (via Messages endpoint): {}", serde_json::to_string_pretty(&body).unwrap_or_default());
 
-    recorder.record_request(request_id, &body).await;
+    let req_headers = format!(
+        "POST {}\nAuthorization: Bearer {}\nContent-Type: application/json",
+        &model.entry.url, &model.entry.api_token
+    );
+    recorder.record_request(request_id, &req_headers, &body).await;
 
     let resp = match client
         .post(&model.entry.url)
@@ -186,28 +200,29 @@ pub async fn forward_messages_via_openai(
             .into_response();
     }
 
+    let resp_headers = format_response_headers(&resp);
     if is_stream {
-        stream_openai_to_anthropic(resp, recorder.clone(), request_id.to_string()).await
+        stream_openai_to_anthropic(resp, recorder.clone(), request_id.to_string(), resp_headers).await
     } else {
-        non_stream_openai_to_anthropic(resp, recorder, request_id).await
+        non_stream_openai_to_anthropic(resp, recorder, request_id, resp_headers).await
     }
 }
 
 // ── Non-stream handlers ──
 
-async fn non_stream_anthropic(resp: reqwest::Response, recorder: &Recorder, request_id: &str) -> Response {
+async fn non_stream_anthropic(resp: reqwest::Response, recorder: &Recorder, request_id: &str, resp_headers: String) -> Response {
     let body: Value = match resp.json().await {
         Ok(v) => v,
         Err(e) => return proxy_error(StatusCode::BAD_GATEWAY, &format!("decode error: {e}")),
     };
 
     debug!("Anthropic response: {}", serde_json::to_string_pretty(&body).unwrap_or_default());
-    recorder.record_response(request_id, &body).await;
+    recorder.record_response(request_id, &resp_headers, &body).await;
 
     axum::Json(body).into_response()
 }
 
-async fn non_stream_anthropic_to_openai(resp: reqwest::Response, recorder: &Recorder, request_id: &str) -> Response {
+async fn non_stream_anthropic_to_openai(resp: reqwest::Response, recorder: &Recorder, request_id: &str, resp_headers: String) -> Response {
     let body: MessagesResponse = match resp.json().await {
         Ok(v) => v,
         Err(e) => return proxy_error(StatusCode::BAD_GATEWAY, &format!("decode error: {e}")),
@@ -216,12 +231,12 @@ async fn non_stream_anthropic_to_openai(resp: reqwest::Response, recorder: &Reco
     let openai_resp = convert::anthropic_to_openai_response(&body);
 
     let resp_value = serde_json::to_value(&openai_resp).unwrap_or_default();
-    recorder.record_response(request_id, &resp_value).await;
+    recorder.record_response(request_id, &resp_headers, &resp_value).await;
 
     axum::Json(openai_resp).into_response()
 }
 
-async fn non_stream_openai_to_anthropic(resp: reqwest::Response, recorder: &Recorder, request_id: &str) -> Response {
+async fn non_stream_openai_to_anthropic(resp: reqwest::Response, recorder: &Recorder, request_id: &str, resp_headers: String) -> Response {
     let body: openai::ChatCompletionResponse = match resp.json().await {
         Ok(v) => v,
         Err(e) => return proxy_error(StatusCode::BAD_GATEWAY, &format!("decode error: {e}")),
@@ -230,14 +245,14 @@ async fn non_stream_openai_to_anthropic(resp: reqwest::Response, recorder: &Reco
     let anthropic_resp = convert::openai_to_anthropic_response(&body);
 
     let resp_value = serde_json::to_value(&anthropic_resp).unwrap_or_default();
-    recorder.record_response(request_id, &resp_value).await;
+    recorder.record_response(request_id, &resp_headers, &resp_value).await;
 
     axum::Json(anthropic_resp).into_response()
 }
 
 // ── Streaming: Anthropic SSE passthrough ──
 
-async fn stream_anthropic_passthrough(resp: reqwest::Response, recorder: Recorder, request_id: String) -> Response {
+async fn stream_anthropic_passthrough(resp: reqwest::Response, recorder: Recorder, request_id: String, resp_headers: String) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(64);
 
     tokio::spawn(async move {
@@ -364,7 +379,7 @@ async fn stream_anthropic_passthrough(resp: reqwest::Response, recorder: Recorde
                 "stop_reason": stop_reason,
                 "usage": usage
             });
-            recorder.record_response(&request_id, &assembled).await;
+            recorder.record_response(&request_id, &resp_headers, &assembled).await;
         }
     });
 
@@ -381,7 +396,7 @@ async fn stream_anthropic_passthrough(resp: reqwest::Response, recorder: Recorde
 
 // ── Streaming: Anthropic SSE → OpenAI SSE ──
 
-async fn stream_anthropic_to_openai(resp: reqwest::Response, recorder: Recorder, request_id: String) -> Response {
+async fn stream_anthropic_to_openai(resp: reqwest::Response, recorder: Recorder, request_id: String, resp_headers: String) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(64);
 
     tokio::spawn(async move {
@@ -534,7 +549,7 @@ async fn stream_anthropic_to_openai(resp: reqwest::Response, recorder: Recorder,
                 &response_text, &reasoning_text, &tool_calls,
                 finish_reason.as_deref(), usage_value,
             );
-            recorder.record_response(&request_id, &assembled).await;
+            recorder.record_response(&request_id, &resp_headers, &assembled).await;
         }
     });
 
@@ -551,7 +566,7 @@ async fn stream_anthropic_to_openai(resp: reqwest::Response, recorder: Recorder,
 
 // ── Streaming: OpenAI SSE → Anthropic SSE ──
 
-async fn stream_openai_to_anthropic(resp: reqwest::Response, recorder: Recorder, request_id: String) -> Response {
+async fn stream_openai_to_anthropic(resp: reqwest::Response, recorder: Recorder, request_id: String, resp_headers: String) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(64);
 
     tokio::spawn(async move {
@@ -681,7 +696,7 @@ async fn stream_openai_to_anthropic(resp: reqwest::Response, recorder: Recorder,
                 "stop_reason": stop_reason,
                 "usage": {"input_tokens": 0, "output_tokens": 0}
             });
-            recorder.record_response(&request_id, &assembled).await;
+            recorder.record_response(&request_id, &resp_headers, &assembled).await;
         }
     });
 
@@ -816,4 +831,14 @@ async fn send_openai_chunk(tx: &tokio::sync::mpsc::Sender<Result<String, std::io
 async fn send_anthropic_event(tx: &tokio::sync::mpsc::Sender<Result<String, std::io::Error>>, event: &str, data: &Value) {
     let data_str = serde_json::to_string(data).unwrap_or_default();
     let _ = tx.send(Ok(format!("event: {event}\ndata: {data_str}\n\n"))).await;
+}
+
+fn format_response_headers(resp: &reqwest::Response) -> String {
+    let mut lines = vec![format!("HTTP/1.1 {}", resp.status())];
+    for (name, value) in resp.headers() {
+        if let Ok(v) = value.to_str() {
+            lines.push(format!("{}: {}", name, v));
+        }
+    }
+    lines.join("\n")
 }
