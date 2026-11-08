@@ -10,7 +10,7 @@ A proxy server for LLM APIs that supports both OpenAI and Anthropic backends. It
   - Anthropic backends: injects native `thinking` parameter when client doesn't specify one
   - OpenAI backends: `<think>` tag parsing → `reasoning_content` conversion
 - **Transparent proxying** — client request bodies are forwarded as-is to their native API format. Each API uses its own standard fields (e.g. OpenAI `reasoning_effort`, Anthropic `thinking`).
-- **Request recording** — saves request/response JSON to disk with automatic cleanup of old records.
+- **Request recording** — saves request/response JSON to disk with automatic cleanup of old records. Failed requests also get an `error` file containing the original status/headers/body, or the error reason when the upstream was never reached.
 - **Streaming** — full SSE streaming support for both backends, including cross-format streaming conversion.
 - **YAML config** — all settings in a single `config.yaml` file.
 

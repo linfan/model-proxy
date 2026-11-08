@@ -59,14 +59,20 @@ pub async fn forward_chat_completion(
         .await
     {
         Ok(r) => r,
-        Err(e) => return proxy_error(StatusCode::BAD_GATEWAY, &format!("upstream error: {e}")),
+        Err(e) => {
+            let msg = format!("upstream error: {e}");
+            recorder.record_error_reason(request_id, session_id, &msg).await;
+            return proxy_error(StatusCode::BAD_GATEWAY, &msg);
+        }
     };
 
     let status = resp.status();
     let is_stream = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
     if !status.is_success() {
+        let err_headers = format_response_headers(&resp);
         let err_body = resp.text().await.unwrap_or_default();
+        recorder.record_error_response(request_id, session_id, &err_headers, &err_body).await;
         debug!("OpenAI error response: {err_body}");
         return (
             StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
@@ -86,9 +92,21 @@ pub async fn forward_chat_completion(
 }
 
 async fn non_stream_response_with_headers(resp: reqwest::Response, recorder: &Recorder, request_id: &str, resp_headers: String, session_id: Option<&str>) -> Response {
-    let body: Value = match resp.json().await {
+    let raw = match resp.text().await {
+        Ok(t) => t,
+        Err(e) => {
+            let msg = format!("read response body error: {e}");
+            recorder.record_error_reason(request_id, session_id, &msg).await;
+            return proxy_error(StatusCode::BAD_GATEWAY, &msg);
+        }
+    };
+
+    let body: Value = match serde_json::from_str(&raw) {
         Ok(v) => v,
-        Err(e) => return proxy_error(StatusCode::BAD_GATEWAY, &format!("decode error: {e}")),
+        Err(e) => {
+            recorder.record_error_response(request_id, session_id, &resp_headers, &raw).await;
+            return proxy_error(StatusCode::BAD_GATEWAY, &format!("decode error: {e}"));
+        }
     };
 
     debug!("OpenAI response: {}", serde_json::to_string_pretty(&body).unwrap_or_default());

@@ -26,16 +26,19 @@ pub async fn handle_chat_completions(
 
     let model_name = match body.get("model").and_then(|v| v.as_str()) {
         Some(name) => name.to_string(),
-        None => return proxy_error(StatusCode::BAD_REQUEST, "missing 'model' field"),
+        None => {
+            let msg = "missing 'model' field";
+            state.recorder.record_error_reason(&request_id, session_id.as_deref(), msg).await;
+            return proxy_error(StatusCode::BAD_REQUEST, msg);
+        }
     };
 
     let resolved = match state.config.resolve_model(&model_name) {
         Some(m) => m,
         None => {
-            return proxy_error(
-                StatusCode::BAD_REQUEST,
-                &format!("unsupported model: {model_name}"),
-            )
+            let msg = format!("unsupported model: {model_name}");
+            state.recorder.record_error_reason(&request_id, session_id.as_deref(), &msg).await;
+            return proxy_error(StatusCode::BAD_REQUEST, &msg);
         }
     };
 
@@ -58,7 +61,11 @@ pub async fn handle_chat_completions(
         BackendType::Anthropic => {
             let request: ChatCompletionRequest = match serde_json::from_value(body) {
                 Ok(r) => r,
-                Err(e) => return proxy_error(StatusCode::BAD_REQUEST, &format!("invalid request: {e}")),
+                Err(e) => {
+                    let msg = format!("invalid request: {e}");
+                    state.recorder.record_error_reason(&request_id, session_id.as_deref(), &msg).await;
+                    return proxy_error(StatusCode::BAD_REQUEST, &msg);
+                }
             };
             anthropic::forward_chat_via_anthropic(
                 &state.http_client,
@@ -86,16 +93,19 @@ pub async fn handle_messages(
 
     let model_name = match body.get("model").and_then(|v| v.as_str()) {
         Some(name) => name.to_string(),
-        None => return proxy_error(StatusCode::BAD_REQUEST, "missing 'model' field"),
+        None => {
+            let msg = "missing 'model' field";
+            state.recorder.record_error_reason(&request_id, session_id.as_deref(), msg).await;
+            return proxy_error(StatusCode::BAD_REQUEST, msg);
+        }
     };
 
     let resolved = match state.config.resolve_model(&model_name) {
         Some(m) => m,
         None => {
-            return proxy_error(
-                StatusCode::BAD_REQUEST,
-                &format!("unsupported model: {model_name}"),
-            )
+            let msg = format!("unsupported model: {model_name}");
+            state.recorder.record_error_reason(&request_id, session_id.as_deref(), &msg).await;
+            return proxy_error(StatusCode::BAD_REQUEST, &msg);
         }
     };
 
@@ -118,7 +128,11 @@ pub async fn handle_messages(
         BackendType::OpenAI => {
             let request: MessagesRequest = match serde_json::from_value(body) {
                 Ok(r) => r,
-                Err(e) => return proxy_error(StatusCode::BAD_REQUEST, &format!("invalid request: {e}")),
+                Err(e) => {
+                    let msg = format!("invalid request: {e}");
+                    state.recorder.record_error_reason(&request_id, session_id.as_deref(), &msg).await;
+                    return proxy_error(StatusCode::BAD_REQUEST, &msg);
+                }
             };
             anthropic::forward_messages_via_openai(
                 &state.http_client,

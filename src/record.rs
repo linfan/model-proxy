@@ -41,23 +41,39 @@ impl Recorder {
         if self.max_count == 0 {
             return;
         }
-        let filename = self.filename(request_id, "sent", session_id).await;
         let body_str = serde_json::to_string_pretty(body).unwrap_or_default();
-        let content = format!("{headers}\n\n{body_str}");
-        if let Err(e) = fs::write(&filename, content).await {
-            warn!("failed to record request: {e}");
-        }
+        self.write(request_id, "sent", session_id, &format!("{headers}\n\n{body_str}")).await;
     }
 
     pub async fn record_response(&self, request_id: &str, session_id: Option<&str>, headers: &str, body: &Value) {
         if self.max_count == 0 {
             return;
         }
-        let filename = self.filename(request_id, "recv", session_id).await;
         let body_str = serde_json::to_string_pretty(body).unwrap_or_default();
-        let content = format!("{headers}\n\n{body_str}");
+        self.write(request_id, "recv", session_id, &format!("{headers}\n\n{body_str}")).await;
+    }
+
+    /// Record a failed request where the upstream returned a response.
+    /// `headers` includes the original status line.
+    pub async fn record_error_response(&self, request_id: &str, session_id: Option<&str>, headers: &str, body: &str) {
+        if self.max_count == 0 {
+            return;
+        }
+        self.write(request_id, "error", session_id, &format!("{headers}\n\n{body}")).await;
+    }
+
+    /// Record a failed request where no upstream response was received.
+    pub async fn record_error_reason(&self, request_id: &str, session_id: Option<&str>, reason: &str) {
+        if self.max_count == 0 {
+            return;
+        }
+        self.write(request_id, "error", session_id, &format!("error: {reason}\n")).await;
+    }
+
+    async fn write(&self, request_id: &str, tag: &str, session_id: Option<&str>, content: &str) {
+        let filename = self.filename(request_id, tag, session_id).await;
         if let Err(e) = fs::write(&filename, content).await {
-            warn!("failed to record response: {e}");
+            warn!("failed to record {tag} file: {e}");
         }
     }
 

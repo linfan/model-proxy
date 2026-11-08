@@ -61,14 +61,20 @@ pub async fn forward_messages(
         .await
     {
         Ok(r) => r,
-        Err(e) => return proxy_error(StatusCode::BAD_GATEWAY, &format!("upstream error: {e}")),
+        Err(e) => {
+            let msg = format!("upstream error: {e}");
+            recorder.record_error_reason(request_id, session_id, &msg).await;
+            return proxy_error(StatusCode::BAD_GATEWAY, &msg);
+        }
     };
 
     let status = resp.status();
     let is_stream = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
     if !status.is_success() {
+        let err_headers = format_response_headers(&resp);
         let err_body = resp.text().await.unwrap_or_default();
+        recorder.record_error_response(request_id, session_id, &err_headers, &err_body).await;
         debug!("Anthropic error response: {err_body}");
         return (
             StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
@@ -109,7 +115,11 @@ pub async fn forward_chat_via_anthropic(
 
     let body = match serde_json::to_value(&anthropic_req) {
         Ok(v) => v,
-        Err(e) => return proxy_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("serialize error: {e}")),
+        Err(e) => {
+            let msg = format!("serialize error: {e}");
+            recorder.record_error_reason(request_id, session_id, &msg).await;
+            return proxy_error(StatusCode::INTERNAL_SERVER_ERROR, &msg);
+        }
     };
 
     debug!("Anthropic request (via OpenAI endpoint): {}", serde_json::to_string_pretty(&body).unwrap_or_default());
@@ -130,13 +140,19 @@ pub async fn forward_chat_via_anthropic(
         .await
     {
         Ok(r) => r,
-        Err(e) => return proxy_error(StatusCode::BAD_GATEWAY, &format!("upstream error: {e}")),
+        Err(e) => {
+            let msg = format!("upstream error: {e}");
+            recorder.record_error_reason(request_id, session_id, &msg).await;
+            return proxy_error(StatusCode::BAD_GATEWAY, &msg);
+        }
     };
 
     let status = resp.status();
 
     if !status.is_success() {
+        let err_headers = format_response_headers(&resp);
         let err_body = resp.text().await.unwrap_or_default();
+        recorder.record_error_response(request_id, session_id, &err_headers, &err_body).await;
         debug!("Anthropic error: {err_body}");
         return (
             StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
@@ -170,7 +186,11 @@ pub async fn forward_messages_via_openai(
 
     let body = match serde_json::to_value(&openai_req) {
         Ok(v) => v,
-        Err(e) => return proxy_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("serialize error: {e}")),
+        Err(e) => {
+            let msg = format!("serialize error: {e}");
+            recorder.record_error_reason(request_id, session_id, &msg).await;
+            return proxy_error(StatusCode::INTERNAL_SERVER_ERROR, &msg);
+        }
     };
 
     debug!("OpenAI request (via Messages endpoint): {}", serde_json::to_string_pretty(&body).unwrap_or_default());
@@ -190,13 +210,19 @@ pub async fn forward_messages_via_openai(
         .await
     {
         Ok(r) => r,
-        Err(e) => return proxy_error(StatusCode::BAD_GATEWAY, &format!("upstream error: {e}")),
+        Err(e) => {
+            let msg = format!("upstream error: {e}");
+            recorder.record_error_reason(request_id, session_id, &msg).await;
+            return proxy_error(StatusCode::BAD_GATEWAY, &msg);
+        }
     };
 
     let status = resp.status();
 
     if !status.is_success() {
+        let err_headers = format_response_headers(&resp);
         let err_body = resp.text().await.unwrap_or_default();
+        recorder.record_error_response(request_id, session_id, &err_headers, &err_body).await;
         return (
             StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
             [(axum::http::header::CONTENT_TYPE, "application/json")],
@@ -217,9 +243,17 @@ pub async fn forward_messages_via_openai(
 // ── Non-stream handlers ──
 
 async fn non_stream_anthropic(resp: reqwest::Response, recorder: &Recorder, request_id: &str, resp_headers: String, session_id: Option<&str>) -> Response {
-    let body: Value = match resp.json().await {
+    let raw = read_body(resp, recorder, request_id, session_id).await;
+    let raw = match raw {
+        Ok(raw) => raw,
+        Err(resp) => return resp,
+    };
+    let body: Value = match serde_json::from_str(&raw) {
         Ok(v) => v,
-        Err(e) => return proxy_error(StatusCode::BAD_GATEWAY, &format!("decode error: {e}")),
+        Err(e) => {
+            recorder.record_error_response(request_id, session_id, &resp_headers, &raw).await;
+            return proxy_error(StatusCode::BAD_GATEWAY, &format!("decode error: {e}"));
+        }
     };
 
     debug!("Anthropic response: {}", serde_json::to_string_pretty(&body).unwrap_or_default());
@@ -229,9 +263,17 @@ async fn non_stream_anthropic(resp: reqwest::Response, recorder: &Recorder, requ
 }
 
 async fn non_stream_anthropic_to_openai(resp: reqwest::Response, recorder: &Recorder, request_id: &str, resp_headers: String, session_id: Option<&str>) -> Response {
-    let body: MessagesResponse = match resp.json().await {
+    let raw = read_body(resp, recorder, request_id, session_id).await;
+    let raw = match raw {
+        Ok(raw) => raw,
+        Err(resp) => return resp,
+    };
+    let body: MessagesResponse = match serde_json::from_str(&raw) {
         Ok(v) => v,
-        Err(e) => return proxy_error(StatusCode::BAD_GATEWAY, &format!("decode error: {e}")),
+        Err(e) => {
+            recorder.record_error_response(request_id, session_id, &resp_headers, &raw).await;
+            return proxy_error(StatusCode::BAD_GATEWAY, &format!("decode error: {e}"));
+        }
     };
 
     let openai_resp = convert::anthropic_to_openai_response(&body);
@@ -243,9 +285,17 @@ async fn non_stream_anthropic_to_openai(resp: reqwest::Response, recorder: &Reco
 }
 
 async fn non_stream_openai_to_anthropic(resp: reqwest::Response, recorder: &Recorder, request_id: &str, resp_headers: String, session_id: Option<&str>) -> Response {
-    let body: openai::ChatCompletionResponse = match resp.json().await {
+    let raw = read_body(resp, recorder, request_id, session_id).await;
+    let raw = match raw {
+        Ok(raw) => raw,
+        Err(resp) => return resp,
+    };
+    let body: openai::ChatCompletionResponse = match serde_json::from_str(&raw) {
         Ok(v) => v,
-        Err(e) => return proxy_error(StatusCode::BAD_GATEWAY, &format!("decode error: {e}")),
+        Err(e) => {
+            recorder.record_error_response(request_id, session_id, &resp_headers, &raw).await;
+            return proxy_error(StatusCode::BAD_GATEWAY, &format!("decode error: {e}"));
+        }
     };
 
     let anthropic_resp = convert::openai_to_anthropic_response(&body);
@@ -254,6 +304,18 @@ async fn non_stream_openai_to_anthropic(resp: reqwest::Response, recorder: &Reco
     recorder.record_response(request_id, session_id, &resp_headers, &resp_value).await;
 
     axum::Json(anthropic_resp).into_response()
+}
+
+/// Read the upstream body, recording a no-response error if reading fails.
+async fn read_body(resp: reqwest::Response, recorder: &Recorder, request_id: &str, session_id: Option<&str>) -> Result<String, Response> {
+    match resp.text().await {
+        Ok(raw) => Ok(raw),
+        Err(e) => {
+            let msg = format!("read response body error: {e}");
+            recorder.record_error_reason(request_id, session_id, &msg).await;
+            Err(proxy_error(StatusCode::BAD_GATEWAY, &msg))
+        }
+    }
 }
 
 // ── Streaming: Anthropic SSE passthrough ──
