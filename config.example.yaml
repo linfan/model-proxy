@@ -43,6 +43,7 @@ backends:
       system_prompt: ""         # Optional: injected as first system message
 
     - name: qwen
+      # DashScope OpenAI-compatible mode (compatibility path)
       url: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
       api_token: sk-xxx
       model: qwen-plus
@@ -91,3 +92,30 @@ backends:
       thinking:
         enabled: false          # Don't inject thinking by default
         budget_tokens: 16000    # Budget used if enabled is set to true
+
+  # ── DashScope native API backends ─────────────────────────────
+  # Use these for Alibaba Model Studio's native (non-OpenAI) format.
+  # The proxy converts client requests to the DashScope envelope
+  # (input.messages + parameters) and converts responses back.
+  #
+  # Endpoint URL differs by region and model type:
+  #   China (Beijing):    https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation
+  #   International:      https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/text-generation/generation
+  #   Multimodal models:  .../services/aigc/multimodal-generation/generation
+  dashscope:
+    - name: qwen-native
+      url: https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation
+      api_token: sk-xxx
+      model: qwen-plus
+      system_prompt: ""
+      thinking:
+        enabled: false          # Maps to parameters.enable_thinking
+        budget_tokens: 8192     # Maps to parameters.thinking_budget
+
+    - name: qwen3-thinking
+      url: https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation
+      api_token: sk-xxx
+      model: qwen3-235b-a22b
+      thinking:
+        enabled: true           # reasoning_content is returned in responses
+        budget_tokens: 16384

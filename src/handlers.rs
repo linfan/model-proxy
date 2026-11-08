@@ -6,6 +6,7 @@ use serde_json::Value;
 use tracing::debug;
 
 use crate::proxy::anthropic;
+use crate::proxy::dashscope;
 use crate::proxy::openai as openai_proxy;
 use crate::proxy::{proxy_error, ThinkingSettings};
 use crate::record::generate_request_id;
@@ -71,6 +72,18 @@ pub async fn handle_chat_completions(
                 &state.http_client,
                 resolved,
                 &request,
+                &thinking,
+                &state.recorder,
+                &request_id,
+                session_id.as_deref(),
+            )
+            .await
+        }
+        BackendType::DashScope => {
+            dashscope::forward_chat_completion(
+                &state.http_client,
+                resolved,
+                body,
                 &thinking,
                 &state.recorder,
                 &request_id,
@@ -144,6 +157,26 @@ pub async fn handle_messages(
             )
             .await
         }
+        BackendType::DashScope => {
+            let request: MessagesRequest = match serde_json::from_value(body) {
+                Ok(r) => r,
+                Err(e) => {
+                    let msg = format!("invalid request: {e}");
+                    state.recorder.record_error_reason(&request_id, session_id.as_deref(), &msg).await;
+                    return proxy_error(StatusCode::BAD_REQUEST, &msg);
+                }
+            };
+            dashscope::forward_messages(
+                &state.http_client,
+                resolved,
+                &request,
+                &thinking,
+                &state.recorder,
+                &request_id,
+                session_id.as_deref(),
+            )
+            .await
+        }
     }
 }
 
@@ -160,6 +193,7 @@ pub async fn handle_list_models(State(state): State<AppState>) -> impl IntoRespo
             owned_by: match backend {
                 BackendType::OpenAI => "openai".to_string(),
                 BackendType::Anthropic => "anthropic".to_string(),
+                BackendType::DashScope => "dashscope".to_string(),
             },
         })
         .collect();

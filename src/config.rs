@@ -16,39 +16,36 @@ impl ConfigStore {
 
         let mut models = HashMap::new();
 
-        for entry in &config.backends.openai {
-            if models.contains_key(&entry.name) {
-                anyhow::bail!("duplicate model name: {}", entry.name);
-            }
-            Self::validate_entry(entry)?;
-            models.insert(
-                entry.name.clone(),
-                ResolvedModel {
-                    backend_type: BackendType::OpenAI,
-                    entry: entry.clone(),
-                },
-            );
-        }
-
-        for entry in &config.backends.anthropic {
-            if models.contains_key(&entry.name) {
-                anyhow::bail!("duplicate model name: {}", entry.name);
-            }
-            Self::validate_entry(entry)?;
-            models.insert(
-                entry.name.clone(),
-                ResolvedModel {
-                    backend_type: BackendType::Anthropic,
-                    entry: entry.clone(),
-                },
-            );
-        }
+        Self::register(&mut models, &config.backends.openai, BackendType::OpenAI)?;
+        Self::register(&mut models, &config.backends.anthropic, BackendType::Anthropic)?;
+        Self::register(&mut models, &config.backends.dashscope, BackendType::DashScope)?;
 
         if models.is_empty() {
             anyhow::bail!("no models configured");
         }
 
         Ok(Self { config, models })
+    }
+
+    fn register(
+        models: &mut HashMap<String, ResolvedModel>,
+        entries: &[ModelEntry],
+        backend_type: BackendType,
+    ) -> anyhow::Result<()> {
+        for entry in entries {
+            if models.contains_key(&entry.name) {
+                anyhow::bail!("duplicate model name: {}", entry.name);
+            }
+            Self::validate_entry(entry)?;
+            models.insert(
+                entry.name.clone(),
+                ResolvedModel {
+                    backend_type,
+                    entry: entry.clone(),
+                },
+            );
+        }
+        Ok(())
     }
 
     fn validate_entry(entry: &ModelEntry) -> anyhow::Result<()> {

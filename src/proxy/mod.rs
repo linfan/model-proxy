@@ -1,5 +1,6 @@
 pub mod anthropic;
 pub mod convert;
+pub mod dashscope;
 pub mod openai;
 
 use axum::http::StatusCode;

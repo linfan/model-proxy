@@ -66,6 +66,8 @@ pub struct BackendsConfig {
     pub openai: Vec<ModelEntry>,
     #[serde(default)]
     pub anthropic: Vec<ModelEntry>,
+    #[serde(default)]
+    pub dashscope: Vec<ModelEntry>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -92,6 +94,7 @@ pub struct ThinkingConfig {
 pub enum BackendType {
     OpenAI,
     Anthropic,
+    DashScope,
 }
 
 #[derive(Debug, Clone)]

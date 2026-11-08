@@ -1,17 +1,18 @@
 # Model Proxy
 
-A proxy server for LLM APIs that supports both OpenAI and Anthropic backends. It hides real API keys from clients, maps model names to remote endpoints, and records all requests and responses.
+A proxy server for LLM APIs that supports OpenAI, Anthropic, and DashScope backends. It hides real API keys from clients, maps model names to remote endpoints, and records all requests and responses.
 
 ## Features
 
-- **Dual API support** — exposes both `/v1/chat/completions` (OpenAI format) and `/v1/messages` (Anthropic format). Automatically converts between formats when a client's request format doesn't match the backend type.
+- **Multi-API support** — exposes both `/v1/chat/completions` (OpenAI format) and `/v1/messages` (Anthropic format). Backends can speak OpenAI, Anthropic, or Alibaba Model Studio's native DashScope format; the proxy automatically converts between formats when a client's request format doesn't match the backend type.
 - **Model mapping** — clients use local model names; the proxy replaces them with remote model/URL/token.
 - **Thinking support** — configurable per model via YAML defaults:
   - Anthropic backends: injects native `thinking` parameter when client doesn't specify one
   - OpenAI backends: `<think>` tag parsing → `reasoning_content` conversion
-- **Transparent proxying** — client request bodies are forwarded as-is to their native API format. Each API uses its own standard fields (e.g. OpenAI `reasoning_effort`, Anthropic `thinking`).
+  - DashScope backends: maps to `parameters.enable_thinking` / `parameters.thinking_budget`, and converts `reasoning_content` back to the client format
+- **Transparent proxying** — when the client endpoint matches the backend format, the request body is forwarded as-is. Cross-format requests (including DashScope) are translated while preserving the client's standard field names.
 - **Request recording** — saves request/response JSON to disk with automatic cleanup of old records. Failed requests also get an `error` file containing the original status/headers/body, or the error reason when the upstream was never reached.
-- **Streaming** — full SSE streaming support for both backends, including cross-format streaming conversion.
+- **Streaming** — full SSE streaming support for all backends, including cross-format streaming conversion.
 - **YAML config** — all settings in a single `config.yaml` file.
 
 ## Version
@@ -56,7 +57,15 @@ backends:
       url: https://api.anthropic.com/v1/messages
       api_token: sk-ant-xxx
       model: claude-sonnet-4-20250514
+
+  dashscope:
+    - name: qwen-native
+      url: https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation
+      api_token: sk-xxx
+      model: qwen-plus
 ```
+
+The `dashscope` section uses Alibaba Model Studio's native API (different from the OpenAI-compatible `compatible-mode` endpoint). The proxy translates the client request into the DashScope envelope (`input.messages` + `parameters`) and converts responses back. Use the regional URL that matches your API key, and the `multimodal-generation` endpoint for multimodal models such as `qwen3-vl-plus`.
 
 ## Usage
 
@@ -128,8 +137,9 @@ Thinking defaults are set per model in `config.yaml`. Clients can always overrid
 
 - **Anthropic** (`/v1/messages`): use `"thinking": {"type": "enabled", "budget_tokens": 8000}` per Anthropic's API
 - **OpenAI** (`/v1/chat/completions`): use `"reasoning_effort": "high"` per OpenAI's API (for o-series models)
+- **DashScope**: set `"enable_thinking": true` and optionally `"thinking_budget": 8000` in the client request; these map to DashScope's `parameters.enable_thinking` / `parameters.thinking_budget`
 
-If the client omits thinking fields, the proxy applies the YAML config defaults for Anthropic backends. For OpenAI backends, the config controls `<think>` tag parsing in streaming responses.
+If the client omits thinking fields, the proxy applies the YAML config defaults for Anthropic and DashScope backends. For OpenAI backends, the config controls `<think>` tag parsing in streaming responses.
 
 ## Linux systemd service
 

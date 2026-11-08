@@ -1,4 +1,4 @@
-use serde_json::Value;
+use serde_json::{json, Map, Value};
 
 use crate::types::anthropic::*;
 use crate::types::openai::*;
@@ -279,10 +279,59 @@ pub fn anthropic_to_openai_request(
         stream_options: None,
         max_tokens: Some(req.max_tokens),
         temperature: req.temperature,
-        tools: req.tools.clone(),
-        tool_choice: req.tool_choice.clone(),
+        tools: anthropic_tools_to_openai(&req.tools),
+        tool_choice: anthropic_tool_choice_to_openai(&req.tool_choice),
         extra: Default::default(),
     }
+}
+
+fn anthropic_tools_to_openai(tools: &Option<Vec<Value>>) -> Option<Vec<Value>> {
+    tools.as_ref().map(|tools| {
+        tools
+            .iter()
+            .map(|tool| {
+                if tool.get("type").and_then(|t| t.as_str()) == Some("function") {
+                    return tool.clone();
+                }
+
+                let mut function = Map::new();
+                function.insert(
+                    "name".to_string(),
+                    tool.get("name").cloned().unwrap_or_else(|| json!("")),
+                );
+                if let Some(description) = tool.get("description") {
+                    function.insert("description".to_string(), description.clone());
+                }
+                function.insert(
+                    "parameters".to_string(),
+                    tool.get("input_schema")
+                        .cloned()
+                        .unwrap_or_else(|| json!({"type": "object", "properties": {}})),
+                );
+
+                json!({"type": "function", "function": function})
+            })
+            .collect()
+    })
+}
+
+fn anthropic_tool_choice_to_openai(choice: &Option<Value>) -> Option<Value> {
+    choice.as_ref().map(|choice| {
+        if let Some(s) = choice.as_str() {
+            return json!(s);
+        }
+
+        match choice.get("type").and_then(|t| t.as_str()) {
+            Some("auto") => json!("auto"),
+            Some("any") => json!("required"),
+            Some("none") => json!("none"),
+            Some("tool") => json!({
+                "type": "function",
+                "function": {"name": choice.get("name").cloned().unwrap_or_else(|| json!(""))}
+            }),
+            _ => choice.clone(),
+        }
+    })
 }
 
 // ── OpenAI → Anthropic response ──
